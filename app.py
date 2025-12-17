@@ -10,190 +10,97 @@ import sys
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Deep Value Analyzer", layout="wide")
 
-# Fix for TextBlob on Streamlit Cloud
+# Fix for TextBlob
 @st.cache_resource
 def download_textblob_corpora():
     try:
         subprocess.check_call([sys.executable, "-m", "textblob.download_corpora"])
     except Exception as e:
-        st.warning(f"Could not download TextBlob corpora: {e}")
+        pass 
 
 download_textblob_corpora()
 
-# --- 2. SIDEBAR CONTROLS ---
-st.sidebar.title("🎛️ Market Filters")
-st.sidebar.write("Start with 'Any' to see all stocks, then narrow down.")
+# --- 2. SIDEBAR ---
+st.sidebar.title("🎛️ Settings")
+st.sidebar.write("Start with 'Any'. If you see results, then add filters.")
 
-# FILTER 1: Market Cap
-mc_option = st.sidebar.selectbox(
-    "Market Cap", 
-    ["Any", "Micro ($50mln to $300mln)", "Small ($300mln to $2bln)", "Mid ($2bln to $10bln)", "Large ($10bln to $200bln)"], 
-    index=0
-)
+mc_option = st.sidebar.selectbox("Market Cap", ["Any", "Small ($300mln to $2bln)", "Micro ($50mln to $300mln)"], index=0)
+pe_option = st.sidebar.selectbox("P/E Ratio", ["Any", "Under 15", "Under 20", "Under 30"], index=0)
+pb_option = st.sidebar.selectbox("Price/Book", ["Any", "Under 1", "Under 2", "Under 3"], index=0)
+debt_option = st.sidebar.selectbox("Debt/Equity", ["Any", "Under 0.5", "Under 1"], index=0)
 
-# FILTER 2: Valuation (P/E)
-pe_option = st.sidebar.selectbox(
-    "P/E Ratio (Earnings)", 
-    ["Any", "Under 15", "Under 20", "Under 30", "Under 50"], 
-    index=0
-)
-
-# FILTER 3: Value (P/B)
-pb_option = st.sidebar.selectbox(
-    "Price/Book (Assets)", 
-    ["Any", "Under 1", "Under 2", "Under 3", "Under 5"], 
-    index=0
-)
-
-# FILTER 4: Financial Health
-debt_option = st.sidebar.selectbox(
-    "Debt/Equity", 
-    ["Any", "Under 0.5", "Under 1"], 
-    index=0
-)
-
-# FILTER 5: Profitability
-profit_option = st.sidebar.selectbox(
-    "Net Profit Margin", 
-    ["Any", "Positive (>0%)", "High (>20%)"], 
-    index=0
-)
-
-# SENTIMENT LIMITER
-st.sidebar.markdown("---")
-max_stocks = st.sidebar.slider("Max Stocks to Analyze (Sentiment)", 5, 50, 10)
-
-# --- 3. MAIN FUNCTION ---
-def run_scanner():
-    status_text = st.empty()
-    status_text.info("🔍 Connecting to Finviz...")
+# --- 3. MAIN LOGIC ---
+def run_fast_scan():
+    status = st.empty()
+    status.info("1/3: Connecting to Finviz...")
     
-    # Build the dictionary. Only add keys if they are NOT "Any"
     filters_dict = {}
-    
     if mc_option != "Any": filters_dict['Market Cap.'] = mc_option
     if pe_option != "Any": filters_dict['P/E'] = pe_option
     if pb_option != "Any": filters_dict['P/B'] = pb_option
     if debt_option != "Any": filters_dict['Debt/Equity'] = debt_option
-    if profit_option != "Any": filters_dict['Net Profit Margin'] = profit_option
-
-    # Debug line: Uncomment to see what filters are active
-    # st.write(f"Active Filters: {filters_dict}")
 
     foverview = Overview()
     
+    # --- THE FIX IS HERE ---
+    # If filters are empty (all "Any"), we force 'Top Gainers' to ensure we get data.
+    if not filters_dict:
+        foverview.set_filter(signal='Top Gainers')
+    else:
+        foverview.set_filter(filters_dict=filters_dict)
+        
     try:
-        # Apply filters (if any exist)
-        if filters_dict:
-            foverview.set_filter(filters_dict=filters_dict)
-        
         df_results = foverview.screener_view()
-        
         if df_results.empty:
-            status_text.warning("No stocks found matching these filters.")
+            status.error("No stocks found. Try looser filters (e.g., P/B 'Under 3').")
             return None
-            
     except Exception as e:
-        st.error(f"Finviz Error: {e}")
+        status.error(f"Finviz Connection Error: {e}")
         return None
 
-    status_text.info(f"✅ Found {len(df_results)} stocks. Analyzing sentiment for the top {max_stocks}...")
+    status.info(f"2/3: Found {len(df_results)} stocks. Checking News on top 3...")
     
-    # Limit the dataframe to the user selection (to save time)
-    df_scan = df_results.head(max_stocks)
-    
-    # Progress Bar
-    progress_bar = st.progress(0)
-    
+    # --- LOOP FIX IS HERE ---
+    # We only take the top 3 stocks to prevent the app from freezing
+    df_scan = df_results.head(3)
     results_data = []
     
-    # Iterate for Sentiment
-    for index, row in df_scan.iterrows():
+    progress = st.progress(0)
+    
+    for i, (index, row) in enumerate(df_scan.iterrows()):
         symbol = row['Ticker']
-        
-        # Update Progress
-        progress_bar.progress((index + 1) / len(df_scan))
+        progress.progress((i + 1) / len(df_scan))
         
         try:
+            # Fetch news
             stock = yf.Ticker(symbol)
             news = stock.news
             
             sentiment_score = 0
-            news_count = 0
-            
             if news:
-                # Check up to 3 articles per stock
-                for article in news[:3]:
-                    title = article.get('title', '')
-                    blob = TextBlob(title)
-                    sentiment_score += blob.sentiment.polarity
-                    news_count += 1
-                
-                if news_count > 0:
-                    avg_sentiment = sentiment_score / news_count
-                else:
-                    avg_sentiment = 0
-            else:
-                avg_sentiment = 0 # No news
-                
-            # Create a readable note
-            if news_count == 0:
-                note = "Silent / Ignored"
-            elif avg_sentiment < -0.1:
-                note = "Negative News"
-            elif avg_sentiment > 0.2:
-                note = "Positive News"
-            else:
-                note = "Neutral"
-
+                title = news[0].get('title', '')
+                sentiment_score = TextBlob(title).sentiment.polarity
+            
             results_data.append({
                 "Ticker": symbol,
                 "Price": row['Price'],
                 "P/E": row['P/E'],
                 "P/B": row['P/B'],
-                "Sector": row['Sector'],
-                "Sentiment": round(avg_sentiment, 2),
-                "Note": note
+                "Sentiment": round(sentiment_score, 2)
             })
-            
-            # Be polite to API
-            time.sleep(0.1)
-
         except Exception:
-            continue
+            pass # Skip errors
             
-    status_text.empty()
-    progress_bar.empty()
-    
+        time.sleep(0.1) 
+
+    status.success("3/3: Done!")
+    progress.empty()
     return pd.DataFrame(results_data)
 
-# --- 4. UI LAYOUT ---
-st.title("💰 Deep Value Analyzer")
-st.markdown("""
-**Instructions:**
-1. Leave filters on **"Any"** to start.
-2. Click **Run Scan**.
-3. Then, slowly add filters (like *Small Cap* or *P/E Under 20*) to narrow it down.
-""")
+# --- 4. UI ---
+st.title("🚀 Fast Value Finder")
 
-if st.button("Run Scan", type="primary"):
-    with st.spinner("Analyzing market data..."):
-        df = run_scanner()
-        
-        if df is not None and not df.empty:
-            st.success("Analysis Complete!")
-            
-            # Formatting the table for display
-            st.dataframe(
-                df,
-                column_config={
-                    "Ticker": "Symbol",
-                    "P/B": st.column_config.NumberColumn("Price/Book", format="%.2f"),
-                    "P/E": st.column_config.NumberColumn("P/E Ratio", format="%.2f"),
-                    "Sentiment": st.column_config.NumberColumn("Sentiment", format="%.2f"),
-                },
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.error("No results found. Try changing a filter to 'Any'.")
+if st.button("Run Scan"):
+    df = run_fast_scan()
+    if df is not None:
+        st.dataframe(df, use_container_width=True)
