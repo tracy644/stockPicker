@@ -1,49 +1,70 @@
+import streamlit as st
 import pandas as pd
 from finvizfinance.screener.overview import Overview
-from finvizfinance.screener.valuation import Valuation
-from finvizfinance.screener.financial import Financial
 import yfinance as yf
 from textblob import TextBlob
 import time
+import subprocess
+import sys
 
+# --- 1. CONFIGURATION & SETUP ---
+st.set_page_config(page_title="Hidden Value Finder", layout="wide")
+
+# Fix for TextBlob on Streamlit Cloud (Downloads necessary data if missing)
+@st.cache_resource
+def download_textblob_corpora():
+    try:
+        subprocess.check_call([sys.executable, "-m", "textblob.download_corpora"])
+    except Exception as e:
+        st.warning(f"Could not download TextBlob corpora: {e}")
+
+download_textblob_corpora()
+
+# --- 2. THE SCANNING FUNCTION ---
 def get_hidden_value_stocks():
-    print("🔍 Scanning the market for hidden value stocks...")
+    status_text = st.empty() # Placeholder for status updates
+    status_text.info("🔍 Connecting to Finviz to screen stocks...")
     
-    # 1. Setup the Screener Filters
-    # We combine filters to find specific 'hidden' value characteristics
+    # CORRECTED FILTER KEYS
+    # These must match Finviz.com dropdown labels exactly
     filters_dict = {
-        'Market Cap': 'Small ($300mln to $2bln)', # ignored by big wall street firms
-        'P/B': 'Under 1',                         # Trading below "book" value
-        'P/E': 'Under 15',                        # Cheap relative to earnings
-        'Debt/Equity': 'Under 0.5',               # Low debt (safe)
-        'Net Profit Margin': 'Positive'           # Must be actually making money
+        'Market Cap.': 'Small ($300mln to $2bln)',  # Added the dot "."
+        'Price/Book': 'Under 1',                     # Changed from 'P/B'
+        'P/E': 'Under 15',
+        'Debt/Eq': 'Under 0.5',                      # Changed from 'Debt/Equity'
+        'Net Profit Margin': 'Positive'
     }
     
-    # Initialize the screener with our filters
-    # We use 'Overview' to get the base list
     foverview = Overview()
-    foverview.set_filter(filters_dict=filters_dict)
     
-    # Get the results
     try:
+        foverview.set_filter(filters_dict=filters_dict)
         df_results = foverview.screener_view()
+        
         if df_results.empty:
-            print("No stocks matched the strict criteria.")
             return None
+            
     except Exception as e:
-        print(f"Error fetching data: {e}")
+        st.error(f"Error fetching data from Finviz: {e}")
         return None
 
-    print(f"Found {len(df_results)} potential candidates. Analyzing sentiment...")
+    status_text.info(f"✅ Found {len(df_results)} candidates. Analyzing News Sentiment (this takes a moment)...")
     
-    # 2. Analyze Sentiment for each candidate
-    # We want to know if they are hated (contrarian) or just ignored.
+    # Progress bar
+    progress_bar = st.progress(0)
+    total_stocks = len(df_results)
     
     results_data = []
     
-    for symbol in df_results['Ticker']:
+    # Iterate through results
+    for index, row in df_results.iterrows():
+        symbol = row['Ticker']
+        
+        # Update progress
+        progress_bar.progress((index + 1) / total_stocks)
+        
         try:
-            # Fetch recent news using yfinance
+            # Fetch news via yfinance
             stock = yf.Ticker(symbol)
             news = stock.news
             
@@ -51,21 +72,31 @@ def get_hidden_value_stocks():
             news_count = 0
             
             if news:
-                for article in news[:5]: # Analyze latest 5 articles
+                # Analyze up to 5 latest articles
+                for article in news[:5]: 
                     title = article.get('title', '')
-                    # Simple sentiment analysis using TextBlob
                     analysis = TextBlob(title)
                     sentiment_score += analysis.sentiment.polarity
                     news_count += 1
                 
-                avg_sentiment = sentiment_score / news_count
+                if news_count > 0:
+                    avg_sentiment = sentiment_score / news_count
+                else:
+                    avg_sentiment = 0
             else:
-                avg_sentiment = 0 # No news often means "ignored" (Good for hidden value!)
+                avg_sentiment = 0 
 
-            # Add data to our list
-            # We grab the row from our screener dataframe to keep the fundamental data
-            row = df_results.loc[df_results['Ticker'] == symbol].iloc[0]
-            
+            # Create the note
+            note = ""
+            if news_count == 0:
+                note = "Unknown/Ignored (Hidden Gem?)"
+            elif avg_sentiment < -0.1:
+                note = "Negative (Contrarian?)"
+            elif avg_sentiment > 0.3:
+                note = "Positive (Momentum)"
+            else:
+                note = "Neutral"
+
             results_data.append({
                 'Ticker': symbol,
                 'Company': row['Company'],
@@ -74,44 +105,52 @@ def get_hidden_value_stocks():
                 'P/E': row['P/E'],
                 'P/B': row['P/B'],
                 'Sentiment': round(avg_sentiment, 2),
-                'Note': interpret_sentiment(avg_sentiment, news_count)
+                'Note': note
             })
             
-            # Sleep briefly to avoid hitting API rate limits too hard
-            time.sleep(0.5)
+            # Tiny sleep to be polite to the API
+            time.sleep(0.2)
             
         except Exception as e:
-            print(f"Skipping {symbol} due to error: {e}")
-            continue
+            continue # Skip this stock if error
 
-    # Create final DataFrame
-    final_df = pd.DataFrame(results_data)
+    status_text.empty() # Clear the status text
+    progress_bar.empty() # Clear progress bar
     
-    # Sort by P/B ratio (Deepest value first)
+    # Create Final DataFrame
+    final_df = pd.DataFrame(results_data)
     if not final_df.empty:
+        # Sort by Price to Book (Deepest value first)
         final_df = final_df.sort_values(by='P/B', ascending=True)
         
     return final_df
 
-def interpret_sentiment(score, count):
-    if count == 0:
-        return "Unknown/Ignored (Hidden Gem?)"
-    elif score < -0.1:
-        return "Negative (Contrarian Play?)"
-    elif score > 0.3:
-        return "Positive (Momentum?)"
-    else:
-        return "Neutral"
+# --- 3. THE APP UI ---
+st.title("💰 Hidden Value Stock Finder")
+st.markdown("""
+This tool finds small-cap stocks that are:
+*   **Cheap** (P/E < 15, P/B < 1)
+*   **Safe** (Debt/Eq < 0.5)
+*   **Profitable** (Positive Margins)
+*   **Ignored** (Analyzed via News Sentiment)
+""")
 
-if __name__ == "__main__":
-    value_stocks = get_hidden_value_stocks()
-    
-    if value_stocks is not None:
-        pd.set_option('display.max_columns', None)
-        pd.set_option('display.width', 1000)
-        print("\n--- POTENTIAL HIDDEN VALUE STOCKS ---")
-        print(value_stocks[['Ticker', 'Price', 'P/E', 'P/B', 'Sector', 'Sentiment', 'Note']].to_string(index=False))
+if st.button("Run Market Scan"):
+    with st.spinner('Scanning the market...'):
+        df = get_hidden_value_stocks()
         
-        # Save to CSV
-        value_stocks.to_csv('hidden_value_stocks.csv', index=False)
-        print("\nResults saved to 'hidden_value_stocks.csv'")
+        if df is not None and not df.empty:
+            st.success(f"Scan Complete! Found {len(df)} stocks.")
+            st.dataframe(
+                df, 
+                column_config={
+                    "Ticker": "Symbol",
+                    "P/B": st.column_config.NumberColumn("Price/Book", format="%.2f"),
+                    "P/E": st.column_config.NumberColumn("P/E Ratio", format="%.2f"),
+                    "Sentiment": st.column_config.NumberColumn("Sentiment Score", format="%.2f"),
+                },
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.warning("No stocks matched these strict criteria today.")
