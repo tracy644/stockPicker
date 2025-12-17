@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 # --- 1. CONFIGURATION & SETUP ---
-st.set_page_config(page_title="Hidden Value Finder", layout="wide")
+st.set_page_config(page_title="Deep Value Hunter", layout="wide")
 
 # Fix for TextBlob on Streamlit Cloud
 @st.cache_resource
@@ -20,35 +20,89 @@ def download_textblob_corpora():
 
 download_textblob_corpora()
 
-# --- 2. SIDEBAR CONTROLS ---
-st.sidebar.header("🔍 Filter Settings")
-st.sidebar.write("Relax these if you see 0 results.")
+# --- 2. SIDEBAR WITH EXPLANATIONS ---
+st.sidebar.title("🎛️ Screener Settings")
+st.sidebar.markdown("Adjust these to filter the market.")
 
-# User selects filters (We map these to Finviz text)
-mc_option = st.sidebar.selectbox("Market Cap", ["Small ($300mln to $2bln)", "Micro ($50mln to $300mln)", "Mid ($2bln to $10bln)", "Any"], index=0)
-pb_option = st.sidebar.selectbox("Price/Book (Assets)", ["Under 1", "Under 2", "Under 3", "Any"], index=1) # Default to Under 2 (Looser)
-pe_option = st.sidebar.selectbox("P/E Ratio (Earnings)", ["Under 15", "Under 20", "Under 25", "Under 30", "Any"], index=1) # Default to Under 20
-debt_option = st.sidebar.selectbox("Debt/Equity", ["Under 0.5", "Under 1", "Any"], index=1) # Default to Under 1
+# -- MARKET CAP --
+mc_help = "The total value of the company's shares. Large funds often ignore 'Small' and 'Micro' caps, which is where hidden value lives."
+mc_option = st.sidebar.selectbox(
+    "Market Cap (Size)", 
+    ["Any", "Micro ($50mln to $300mln)", "Small ($300mln to $2bln)", "Mid ($2bln to $10bln)"], 
+    index=2,
+    help=mc_help
+)
+
+# -- P/E RATIO --
+pe_help = "Price-to-Earnings Ratio. The lower the number, the cheaper the stock is relative to its profit. Under 15 is historically considered 'Value'."
+pe_option = st.sidebar.selectbox(
+    "P/E Ratio (Valuation)", 
+    ["Any", "Under 10", "Under 15", "Under 20", "Under 30", "Under 50"], 
+    index=2,
+    help=pe_help
+)
+
+# -- P/B RATIO --
+pb_help = "Price-to-Book Ratio. Compares stock price to the company's assets. Under 1.0 means you are paying less than the accounting value of their stuff."
+pb_option = st.sidebar.selectbox(
+    "Price/Book (Assets)", 
+    ["Any", "Under 1", "Under 2", "Under 3", "Under 5"], 
+    index=2,
+    help=pb_help
+)
+
+# -- DEBT --
+debt_help = "Debt-to-Equity Ratio. Measures financial leverage. Under 0.5 is very safe. Over 2.0 can be risky if rates rise."
+debt_option = st.sidebar.selectbox(
+    "Debt/Equity (Risk)", 
+    ["Any", "Under 0.1", "Under 0.5", "Under 1"], 
+    index=3,
+    help=debt_help
+)
+
+# -- DIVIDEND --
+div_help = "The % of cash the company pays back to you per year. > 3% is considered good income."
+div_option = st.sidebar.selectbox(
+    "Dividend Yield (Income)",
+    ["Any", "Positive (>0%)", "High (>5%)", "Very High (>10%)"],
+    index=0,
+    help=div_help
+)
+
+# -- SHORT FLOAT --
+short_help = "The % of shares that investors have bet AGAINST. High short interest (>20%) means everyone hates it... which can lead to a massive rally if good news comes out (Short Squeeze)."
+short_option = st.sidebar.selectbox(
+    "Float Short (Pessimism)",
+    ["Any", "Low (<5%)", "High (>20%)", "Extreme (>30%)"],
+    index=0,
+    help=short_help
+)
 
 # --- 3. THE SCANNING FUNCTION ---
 def get_hidden_value_stocks():
     status_text = st.empty() 
     status_text.info("🔍 Connecting to Finviz to screen stocks...")
     
-    # Construct filters dynamically based on Sidebar
-    filters_dict = {
-        'Net Profit Margin': 'Positive (>0%)' # Always keep this on (we don't want money losers)
-    }
+    # Construct filters dynamically
+    # IMPORTANT: If "Any" is selected, we simply DO NOT include that key in the dictionary.
+    filters_dict = {}
+    
+    # Always ensure they are profitable (unless you want to find broken companies)
+    # You can comment this out if you want to find money-losing turnaround plays
+    filters_dict['Net Profit Margin'] = 'Positive (>0%)' 
 
-    # Only add filters if they are not 'Any'
     if mc_option != "Any":
         filters_dict['Market Cap.'] = mc_option
-    if pb_option != "Any":
-        filters_dict['P/B'] = pb_option
     if pe_option != "Any":
         filters_dict['P/E'] = pe_option
+    if pb_option != "Any":
+        filters_dict['P/B'] = pb_option
     if debt_option != "Any":
         filters_dict['Debt/Equity'] = debt_option
+    if div_option != "Any":
+        filters_dict['Dividend Yield'] = div_option
+    if short_option != "Any":
+        filters_dict['Float Short'] = short_option
     
     foverview = Overview()
     
@@ -60,10 +114,10 @@ def get_hidden_value_stocks():
             return None
             
     except Exception as e:
-        st.error(f"Error fetching data from Finviz: {e}")
+        st.error(f"Error fetching data: {e}")
         return None
 
-    status_text.info(f"✅ Found {len(df_results)} candidates. Analyzing News Sentiment...")
+    status_text.info(f"✅ Found {len(df_results)} candidates. Analyzing top results...")
     
     # Progress bar
     progress_bar = st.progress(0)
@@ -71,10 +125,11 @@ def get_hidden_value_stocks():
     
     results_data = []
     
-    # Limit to top 10 stocks to save time if list is huge
-    max_analyze = 10
+    # Limit to top 15 stocks to save time/resources
+    # Finviz puts the "best" matches first usually
+    max_analyze = 15
     if total_stocks > max_analyze:
-        st.toast(f"Analyzing top {max_analyze} of {total_stocks} stocks to save time...")
+        st.toast(f"Analyzing top {max_analyze} of {total_stocks} stocks...")
         df_scan = df_results.head(max_analyze)
     else:
         df_scan = df_results
@@ -82,8 +137,6 @@ def get_hidden_value_stocks():
     # Iterate through results
     for index, row in df_scan.iterrows():
         symbol = row['Ticker']
-        
-        # Update progress
         progress_bar.progress((index + 1) / len(df_scan))
         
         try:
@@ -95,7 +148,6 @@ def get_hidden_value_stocks():
             news_count = 0
             
             if news:
-                # Analyze up to 5 latest articles
                 for article in news[:5]: 
                     title = article.get('title', '')
                     analysis = TextBlob(title)
@@ -109,14 +161,13 @@ def get_hidden_value_stocks():
             else:
                 avg_sentiment = 0 
 
-            # Create the note
-            note = ""
+            # Interpret Sentiment
             if news_count == 0:
-                note = "Unknown (Hidden Gem?)"
+                note = "Silent (Hidden?)"
             elif avg_sentiment < -0.1:
-                note = "Negative (Contrarian?)"
-            elif avg_sentiment > 0.3:
-                note = "Positive (Momentum)"
+                note = "Hated (Contrarian)"
+            elif avg_sentiment > 0.2:
+                note = "Loved (Momentum)"
             else:
                 note = "Neutral"
 
@@ -131,7 +182,6 @@ def get_hidden_value_stocks():
                 'Note': note
             })
             
-            # Tiny sleep
             time.sleep(0.1)
             
         except Exception as e:
@@ -143,16 +193,16 @@ def get_hidden_value_stocks():
     # Create Final DataFrame
     final_df = pd.DataFrame(results_data)
     if not final_df.empty:
+        # Sort by P/B (Value)
         final_df = final_df.sort_values(by='P/B', ascending=True)
         
     return final_df
 
 # --- 4. THE APP UI ---
-st.title("💰 Hidden Value Stock Finder")
+st.title("💰 Deep Value Hunter")
 st.markdown("""
-**How to use:**
-1. Use the **Sidebar (left)** to adjust strictness.
-2. If you get 0 results, change **Price/Book** to "Under 2" or **Debt** to "Any".
+This tool finds stocks that are mathematically cheap but potentially ignored. 
+**Hover over the (?) in the sidebar to understand the filters.**
 """)
 
 if st.button("Run Market Scan"):
@@ -173,4 +223,4 @@ if st.button("Run Market Scan"):
                 hide_index=True
             )
         else:
-            st.warning("No stocks matched these criteria. Try relaxing the filters in the Sidebar!")
+            st.warning("No stocks matched. Try setting more filters to 'Any'.")
