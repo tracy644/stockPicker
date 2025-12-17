@@ -22,7 +22,7 @@ download_textblob_corpora()
 
 # --- 2. SIDEBAR ---
 st.sidebar.title("🎛️ Settings")
-st.sidebar.write("Start with 'Any'. If you see results, then add filters.")
+st.sidebar.write("Start with 'Any'. Then filter.")
 
 mc_option = st.sidebar.selectbox("Market Cap", ["Any", "Small ($300mln to $2bln)", "Micro ($50mln to $300mln)"], index=0)
 pe_option = st.sidebar.selectbox("P/E Ratio", ["Any", "Under 15", "Under 20", "Under 30"], index=0)
@@ -30,7 +30,7 @@ pb_option = st.sidebar.selectbox("Price/Book", ["Any", "Under 1", "Under 2", "Un
 debt_option = st.sidebar.selectbox("Debt/Equity", ["Any", "Under 0.5", "Under 1"], index=0)
 
 # --- 3. MAIN LOGIC ---
-def run_fast_scan():
+def run_robust_scan():
     status = st.empty()
     status.info("1/3: Connecting to Finviz...")
     
@@ -42,8 +42,7 @@ def run_fast_scan():
 
     foverview = Overview()
     
-    # --- THE FIX IS HERE ---
-    # If filters are empty (all "Any"), we force 'Top Gainers' to ensure we get data.
+    # Force Top Gainers if "Any" is selected to guarantee data
     if not filters_dict:
         foverview.set_filter(signal='Top Gainers')
     else:
@@ -52,17 +51,16 @@ def run_fast_scan():
     try:
         df_results = foverview.screener_view()
         if df_results.empty:
-            status.error("No stocks found. Try looser filters (e.g., P/B 'Under 3').")
+            status.error("No stocks found. Try looser filters.")
             return None
     except Exception as e:
         status.error(f"Finviz Connection Error: {e}")
         return None
 
-    status.info(f"2/3: Found {len(df_results)} stocks. Checking News on top 3...")
+    status.info(f"2/3: Found {len(df_results)} stocks. Checking News on top 5...")
     
-    # --- LOOP FIX IS HERE ---
-    # We only take the top 3 stocks to prevent the app from freezing
-    df_scan = df_results.head(3)
+    # Limit to top 5
+    df_scan = df_results.head(5)
     results_data = []
     
     progress = st.progress(0)
@@ -71,25 +69,34 @@ def run_fast_scan():
         symbol = row['Ticker']
         progress.progress((i + 1) / len(df_scan))
         
+        # Default sentiment is 0 ("N/A")
+        sentiment_score = 0.0
+        note = "N/A (News Error)"
+        
+        # Try to get news, but if it fails, WE KEEP GOING
         try:
-            # Fetch news
             stock = yf.Ticker(symbol)
             news = stock.news
-            
-            sentiment_score = 0
             if news:
                 title = news[0].get('title', '')
                 sentiment_score = TextBlob(title).sentiment.polarity
-            
-            results_data.append({
-                "Ticker": symbol,
-                "Price": row['Price'],
-                "P/E": row['P/E'],
-                "P/B": row['P/B'],
-                "Sentiment": round(sentiment_score, 2)
-            })
+                note = "News Found"
+            else:
+                note = "No News"
         except Exception:
-            pass # Skip errors
+            note = "Connection Blocked"
+            
+        # --- THE FIX: We append OUTSIDE the try/except block ---
+        # This ensures the stock shows up even if Yahoo blocks us
+        results_data.append({
+            "Ticker": symbol,
+            "Price": row['Price'],
+            "P/E": row['P/E'],
+            "P/B": row['P/B'],
+            "Sector": row['Sector'],
+            "Sentiment": round(sentiment_score, 2),
+            "Status": note
+        })
             
         time.sleep(0.1) 
 
@@ -98,9 +105,18 @@ def run_fast_scan():
     return pd.DataFrame(results_data)
 
 # --- 4. UI ---
-st.title("🚀 Fast Value Finder")
+st.title("🚀 Robust Value Finder")
 
 if st.button("Run Scan"):
-    df = run_fast_scan()
+    df = run_robust_scan()
     if df is not None:
-        st.dataframe(df, use_container_width=True)
+        # Show the data!
+        st.dataframe(
+            df, 
+            column_config={
+                "Ticker": "Symbol",
+                "P/B": st.column_config.NumberColumn("Price/Book", format="%.2f"),
+                "Sentiment": st.column_config.NumberColumn("Sentiment", format="%.2f"),
+            },
+            use_container_width=True
+        )
