@@ -20,19 +20,35 @@ def download_textblob_corpora():
 
 download_textblob_corpora()
 
-# --- 2. THE SCANNING FUNCTION ---
+# --- 2. SIDEBAR CONTROLS ---
+st.sidebar.header("🔍 Filter Settings")
+st.sidebar.write("Relax these if you see 0 results.")
+
+# User selects filters (We map these to Finviz text)
+mc_option = st.sidebar.selectbox("Market Cap", ["Small ($300mln to $2bln)", "Micro ($50mln to $300mln)", "Mid ($2bln to $10bln)", "Any"], index=0)
+pb_option = st.sidebar.selectbox("Price/Book (Assets)", ["Under 1", "Under 2", "Under 3", "Any"], index=1) # Default to Under 2 (Looser)
+pe_option = st.sidebar.selectbox("P/E Ratio (Earnings)", ["Under 15", "Under 20", "Under 25", "Under 30", "Any"], index=1) # Default to Under 20
+debt_option = st.sidebar.selectbox("Debt/Equity", ["Under 0.5", "Under 1", "Any"], index=1) # Default to Under 1
+
+# --- 3. THE SCANNING FUNCTION ---
 def get_hidden_value_stocks():
     status_text = st.empty() 
     status_text.info("🔍 Connecting to Finviz to screen stocks...")
     
-    # --- FIXED FILTERS (UPDATED FOR EXACT STRING MATCH) ---
+    # Construct filters dynamically based on Sidebar
     filters_dict = {
-        'Market Cap.': 'Small ($300mln to $2bln)',
-        'P/B': 'Under 1',
-        'P/E': 'Under 15',
-        'Debt/Equity': 'Under 0.5',
-        'Net Profit Margin': 'Positive (>0%)'  # <--- UPDATED THIS LINE
+        'Net Profit Margin': 'Positive (>0%)' # Always keep this on (we don't want money losers)
     }
+
+    # Only add filters if they are not 'Any'
+    if mc_option != "Any":
+        filters_dict['Market Cap.'] = mc_option
+    if pb_option != "Any":
+        filters_dict['P/B'] = pb_option
+    if pe_option != "Any":
+        filters_dict['P/E'] = pe_option
+    if debt_option != "Any":
+        filters_dict['Debt/Equity'] = debt_option
     
     foverview = Overview()
     
@@ -47,7 +63,7 @@ def get_hidden_value_stocks():
         st.error(f"Error fetching data from Finviz: {e}")
         return None
 
-    status_text.info(f"✅ Found {len(df_results)} candidates. Analyzing News Sentiment (this takes a moment)...")
+    status_text.info(f"✅ Found {len(df_results)} candidates. Analyzing News Sentiment...")
     
     # Progress bar
     progress_bar = st.progress(0)
@@ -55,12 +71,20 @@ def get_hidden_value_stocks():
     
     results_data = []
     
+    # Limit to top 10 stocks to save time if list is huge
+    max_analyze = 10
+    if total_stocks > max_analyze:
+        st.toast(f"Analyzing top {max_analyze} of {total_stocks} stocks to save time...")
+        df_scan = df_results.head(max_analyze)
+    else:
+        df_scan = df_results
+
     # Iterate through results
-    for index, row in df_results.iterrows():
+    for index, row in df_scan.iterrows():
         symbol = row['Ticker']
         
         # Update progress
-        progress_bar.progress((index + 1) / total_stocks)
+        progress_bar.progress((index + 1) / len(df_scan))
         
         try:
             # Fetch news via yfinance
@@ -88,7 +112,7 @@ def get_hidden_value_stocks():
             # Create the note
             note = ""
             if news_count == 0:
-                note = "Unknown/Ignored (Hidden Gem?)"
+                note = "Unknown (Hidden Gem?)"
             elif avg_sentiment < -0.1:
                 note = "Negative (Contrarian?)"
             elif avg_sentiment > 0.3:
@@ -107,31 +131,28 @@ def get_hidden_value_stocks():
                 'Note': note
             })
             
-            # Tiny sleep to be polite to the API
-            time.sleep(0.2)
+            # Tiny sleep
+            time.sleep(0.1)
             
         except Exception as e:
-            continue # Skip this stock if error
+            continue 
 
-    status_text.empty() # Clear the status text
-    progress_bar.empty() # Clear progress bar
+    status_text.empty() 
+    progress_bar.empty() 
     
     # Create Final DataFrame
     final_df = pd.DataFrame(results_data)
     if not final_df.empty:
-        # Sort by Price to Book (Deepest value first)
         final_df = final_df.sort_values(by='P/B', ascending=True)
         
     return final_df
 
-# --- 3. THE APP UI ---
+# --- 4. THE APP UI ---
 st.title("💰 Hidden Value Stock Finder")
 st.markdown("""
-This tool finds small-cap stocks that are:
-*   **Cheap** (P/E < 15, P/B < 1)
-*   **Safe** (Debt/Eq < 0.5)
-*   **Profitable** (Positive Margins)
-*   **Ignored** (Analyzed via News Sentiment)
+**How to use:**
+1. Use the **Sidebar (left)** to adjust strictness.
+2. If you get 0 results, change **Price/Book** to "Under 2" or **Debt** to "Any".
 """)
 
 if st.button("Run Market Scan"):
@@ -152,4 +173,4 @@ if st.button("Run Market Scan"):
                 hide_index=True
             )
         else:
-            st.warning("No stocks matched these strict criteria today.")
+            st.warning("No stocks matched these criteria. Try relaxing the filters in the Sidebar!")
