@@ -10,7 +10,7 @@ import sys
 # --- 1. CONFIGURATION & SETUP ---
 st.set_page_config(page_title="Hidden Value Finder", layout="wide")
 
-# Fix for TextBlob on Streamlit Cloud (Downloads necessary data if missing)
+# Fix for TextBlob on Streamlit Cloud
 @st.cache_resource
 def download_textblob_corpora():
     try:
@@ -22,17 +22,16 @@ download_textblob_corpora()
 
 # --- 2. THE SCANNING FUNCTION ---
 def get_hidden_value_stocks():
-    status_text = st.empty() # Placeholder for status updates
+    status_text = st.empty() 
     status_text.info("🔍 Connecting to Finviz to screen stocks...")
     
-    # CORRECTED FILTER KEYS
-    # These must match Finviz.com dropdown labels exactly
+    # --- FIXED FILTERS BASED ON YOUR ERROR LOG ---
     filters_dict = {
-        'Market Cap.': 'Small ($300mln to $2bln)',  # Added the dot "."
-        'Price/Book': 'Under 1',                     # Changed from 'P/B'
-        'P/E': 'Under 15',
-        'Debt/Eq': 'Under 0.5',                      # Changed from 'Debt/Equity'
-        'Net Profit Margin': 'Positive'
+        'Market Cap.': 'Small ($300mln to $2bln)', # Must have the dot "."
+        'P/B': 'Under 1',                           # Must be 'P/B'
+        'P/E': 'Under 15',                          # Must be 'P/E'
+        'Debt/Equity': 'Under 0.5',                 # Must be 'Debt/Equity'
+        'Net Profit Margin': 'Positive'             # Must be 'Net Profit Margin'
     }
     
     foverview = Overview()
