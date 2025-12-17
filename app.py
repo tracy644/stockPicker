@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from finvizfinance.screener.overview import Overview
+from finvizfinance.screener.valuation import Valuation  # <--- CHANGED to Valuation
 import yfinance as yf
 from textblob import TextBlob
 import time
@@ -40,16 +40,17 @@ def run_robust_scan():
     if pb_option != "Any": filters_dict['P/B'] = pb_option
     if debt_option != "Any": filters_dict['Debt/Equity'] = debt_option
 
-    foverview = Overview()
+    # <--- CHANGED: Use Valuation view to ensure we get P/B column
+    screener = Valuation()
     
     # Force Top Gainers if "Any" is selected to guarantee data
     if not filters_dict:
-        foverview.set_filter(signal='Top Gainers')
+        screener.set_filter(signal='Top Gainers')
     else:
-        foverview.set_filter(filters_dict=filters_dict)
+        screener.set_filter(filters_dict=filters_dict)
         
     try:
-        df_results = foverview.screener_view()
+        df_results = screener.screener_view()
         if df_results.empty:
             status.error("No stocks found. Try looser filters.")
             return None
@@ -69,11 +70,11 @@ def run_robust_scan():
         symbol = row['Ticker']
         progress.progress((i + 1) / len(df_scan))
         
-        # Default sentiment is 0 ("N/A")
+        # Default sentiment
         sentiment_score = 0.0
-        note = "N/A (News Error)"
+        note = "N/A"
         
-        # Try to get news, but if it fails, WE KEEP GOING
+        # Try to get news
         try:
             stock = yf.Ticker(symbol)
             news = stock.news
@@ -86,14 +87,21 @@ def run_robust_scan():
         except Exception:
             note = "Connection Blocked"
             
-        # --- THE FIX: We append OUTSIDE the try/except block ---
-        # This ensures the stock shows up even if Yahoo blocks us
+        # <--- THE FIX: Use .get() for columns that might be missing
+        # We also convert P/B to a number if possible
+        try:
+            pb_val = float(row.get('P/B', 0))
+        except:
+            pb_val = 0
+            
         results_data.append({
             "Ticker": symbol,
-            "Price": row['Price'],
-            "P/E": row['P/E'],
-            "P/B": row['P/B'],
-            "Sector": row['Sector'],
+            # We use .get() so it never crashes if a column is missing
+            "Price": row.get('Price', 'N/A'),
+            "P/E": row.get('P/E', 'N/A'),
+            "P/B": pb_val, 
+            # Valuation view doesn't have Sector, so we default to 'Unknown'
+            "Sector": row.get('Sector', 'Unknown'), 
             "Sentiment": round(sentiment_score, 2),
             "Status": note
         })
@@ -110,7 +118,7 @@ st.title("🚀 Robust Value Finder")
 if st.button("Run Scan"):
     df = run_robust_scan()
     if df is not None:
-        # Show the data!
+        # Show the data
         st.dataframe(
             df, 
             column_config={
