@@ -25,13 +25,13 @@ def get_hidden_value_stocks():
     status_text = st.empty() 
     status_text.info("🔍 Connecting to Finviz to screen stocks...")
     
-    # --- FIXED FILTERS BASED ON YOUR ERROR LOG ---
+    # --- FIXED FILTERS (UPDATED FOR EXACT STRING MATCH) ---
     filters_dict = {
-        'Market Cap.': 'Small ($300mln to $2bln)', # Must have the dot "."
-        'P/B': 'Under 1',                           # Must be 'P/B'
-        'P/E': 'Under 15',                          # Must be 'P/E'
-        'Debt/Equity': 'Under 0.5',                 # Must be 'Debt/Equity'
-        'Net Profit Margin': 'Positive'             # Must be 'Net Profit Margin'
+        'Market Cap.': 'Small ($300mln to $2bln)',
+        'P/B': 'Under 1',
+        'P/E': 'Under 15',
+        'Debt/Equity': 'Under 0.5',
+        'Net Profit Margin': 'Positive (>0%)'  # <--- UPDATED THIS LINE
     }
     
     foverview = Overview()
