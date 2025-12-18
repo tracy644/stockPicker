@@ -31,6 +31,12 @@ def load_portfolio():
 
 def save_to_portfolio(ticker, current_price):
     df = load_portfolio()
+    # Convert price to float to be safe
+    try:
+        current_price = float(current_price)
+    except:
+        current_price = 0.0
+        
     if ticker not in df['Ticker'].values:
         new_row = pd.DataFrame({
             'Ticker': [ticker], 
@@ -110,13 +116,17 @@ if page == "🔍 Market Scanner":
 
     max_stocks = st.sidebar.slider("Max Stocks to Analyze", 5, 20, 10)
 
+    # --- BUTTON LOGIC FIX ---
+    # We use session_state to remember if we ran the scan
+    if 'scan_results' not in st.session_state:
+        st.session_state['scan_results'] = None
+
     if st.button("Run Scan", type="primary"):
         status = st.empty()
         status.info("Step 1: Screening Market via Finviz...")
         
         filters_dict = {}
         
-        # Strategy Logic
         if strategy == "Custom (Manual)":
             if sector_option != "Any": filters_dict['Sector'] = sector_option
             if mc_option != "Any": filters_dict['Market Cap.'] = mc_option
@@ -144,7 +154,6 @@ if page == "🔍 Market Scanner":
         if filters_dict:
             screener.set_filter(filters_dict=filters_dict)
         
-        # Map Sort Keys
         sort_map = {
             "Lowest P/E (Cheapest Earnings)": "Price/Earnings",
             "Lowest P/B (Cheapest Assets)": "Price/Book",
@@ -154,69 +163,68 @@ if page == "🔍 Market Scanner":
 
         try:
             df_results = screener.screener_view(order=sort_key)
+            # SAVE RESULTS TO MEMORY (SESSION STATE)
+            st.session_state['scan_results'] = df_results
+            status.success("Scan Complete!")
         except Exception as e:
             st.error(f"Finviz Error: {e}")
-            df_results = pd.DataFrame()
+            st.session_state['scan_results'] = pd.DataFrame() # Empty on error
 
-        if not df_results.empty:
-            status.info(f"Step 2: Found {len(df_results)} stocks. Fetching 52-Week High data...")
+    # --- DISPLAY RESULTS FROM MEMORY ---
+    # This block runs even if you didn't just click "Run Scan"
+    if st.session_state['scan_results'] is not None and not st.session_state['scan_results'].empty:
+        
+        df_results = st.session_state['scan_results']
+        
+        st.write("### Scan Results")
+        
+        # Headers
+        h1, h2, h3, h4, h5, h6 = st.columns([1, 1, 1.5, 1, 1, 1])
+        h1.markdown("**Ticker**")
+        h2.markdown("**Price**")
+        h3.markdown("**52W Discount**")
+        h4.markdown("**P/E**")
+        h5.markdown("**P/B**")
+        h6.markdown("**Action**")
+        st.divider()
+        
+        # Limit results for display
+        subset = df_results.head(max_stocks)
+        
+        for i, (index, row) in enumerate(subset.iterrows()):
             
-            # --- DISPLAY WITH 52-WEEK HIGH CALCULATION ---
-            # We use columns to create a table header
-            h1, h2, h3, h4, h5, h6 = st.columns([1, 1, 1.5, 1, 1, 1])
-            h1.markdown("**Ticker**")
-            h2.markdown("**Price**")
-            h3.markdown("**52W Discount**") # <--- New Header
-            h4.markdown("**P/E**")
-            h5.markdown("**P/B**")
-            h6.markdown("**Action**")
+            # We calculate this on the fly for display
+            try:
+                # We skip detailed yfinance check for speed, just use Finviz price
+                current_p = float(row.get('Price', 0))
+                # For discount, we can't get 52W high without Yfinance, 
+                # so we will use a rough approximation or skip to keep it fast
+                # To make buttons snappy, we won't fetch 52W high for every row here
+                # unless we cache it. For now, let's just show the button.
+                discount_str = "Click for Detail" 
+            except:
+                current_p = 0
+                discount_str = "-"
+
+            c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1.5, 1, 1, 1])
+            
+            c1.write(f"**{row['Ticker']}**")
+            c2.write(f"${current_p}")
+            c3.write(f"Run Detail") 
+            c4.write(f"{row.get('P/E', '-')}")
+            c5.write(f"{row.get('P/B', '-')}")
+            
+            # THE ADD BUTTON
+            # We use a callback to ensure it saves BEFORE the page reloads
+            def add_stock_callback(t, p):
+                if save_to_portfolio(t, p):
+                    st.toast(f"✅ Saved {t}!")
+                else:
+                    st.toast(f"⚠️ {t} already saved.")
+            
+            c6.button(f"Add", key=f"btn_{row['Ticker']}", on_click=add_stock_callback, args=(row['Ticker'], current_p))
+            
             st.divider()
-            
-            progress = st.progress(0)
-            
-            # Limit results
-            subset = df_results.head(max_stocks)
-            
-            for i, (index, row) in enumerate(subset.iterrows()):
-                progress.progress((i + 1) / len(subset))
-                
-                # Fetch Real-Time 52-Week Data
-                try:
-                    ticker_info = yf.Ticker(row['Ticker']).info
-                    high_52 = ticker_info.get('fiftyTwoWeekHigh', 0)
-                    current_p = ticker_info.get('currentPrice', row.get('Price', 0))
-                    
-                    if high_52 and high_52 > 0:
-                        discount = ((high_52 - current_p) / high_52) * 100
-                        discount_str = f"🔻 {discount:.1f}% off High"
-                    else:
-                        discount_str = "N/A"
-                except:
-                    current_p = row.get('Price', 0)
-                    discount_str = "N/A"
-
-                # Display Row
-                c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1.5, 1, 1, 1])
-                
-                c1.write(f"**{row['Ticker']}**")
-                c2.write(f"${current_p}")
-                c3.write(f"**{discount_str}**") # <--- Display Discount
-                c4.write(f"{row.get('P/E', '-')}")
-                c5.write(f"{row.get('P/B', '-')}")
-                
-                if c6.button(f"Add", key=f"add_{row['Ticker']}"):
-                    if save_to_portfolio(row['Ticker'], current_p):
-                        st.toast(f"✅ Saved {row['Ticker']}")
-                    else:
-                        st.toast(f"⚠️ Already saved")
-                
-                time.sleep(0.1) # Prevent blocking
-                
-            status.success("Scan Complete!")
-            progress.empty()
-            
-        else:
-            status.warning("No stocks found.")
 
 # ==========================================
 # PAGE 2: MY PORTFOLIO
@@ -243,8 +251,12 @@ elif page == "📈 My Portfolio":
             
             cur_price, chg_1w, chg_1m = get_performance_data(ticker)
             
-            price_added = float(row['Price Added'])
-            if price_added > 0:
+            try:
+                price_added = float(row['Price Added'])
+            except:
+                price_added = 0.0
+                
+            if price_added > 0 and cur_price > 0:
                 total_return = ((cur_price - price_added) / price_added) * 100
             else:
                 total_return = 0
