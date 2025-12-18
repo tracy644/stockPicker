@@ -107,7 +107,7 @@ if page == "🔍 Market Scanner":
     )
     
     sort_criteria = st.sidebar.selectbox(
-        "2. Sort Market By:",
+        "2. Sort Market By (Fixes 'Alphabetical' issue):",
         ["Lowest P/E (Cheapest Earnings)", 
          "Lowest P/B (Cheapest Assets)", 
          "Worst Performance (Biggest Discount)", 
@@ -163,13 +163,20 @@ if page == "🔍 Market Scanner":
         if filters_dict:
             screener.set_filter(filters_dict=filters_dict)
         
+        # --- THE FIX: Pass Sort Order to screener_view ---
+        # Map user text to Finviz URL codes
+        sort_map = {
+            "Lowest P/E (Cheapest Earnings)": "pe",
+            "Lowest P/B (Cheapest Assets)": "pb",
+            "Worst Performance (Biggest Discount)": "perf",
+            "Highest Volume (Most Active)": "-volume" # Minus means descending (High to low)
+        }
+        
+        sort_key = sort_map.get(sort_criteria, 'pe') # Default to P/E if error
+
         try:
-            if sort_criteria == "Lowest P/E (Cheapest Earnings)": screener.set_sort(key='P/E')
-            elif sort_criteria == "Lowest P/B (Cheapest Assets)": screener.set_sort(key='P/B')
-            elif sort_criteria == "Worst Performance (Biggest Discount)": screener.set_sort(key='Performance')
-            elif sort_criteria == "Highest Volume (Most Active)": screener.set_sort(key='Volume', order='Descending')
-            
-            df_results = screener.screener_view()
+            # We pass 'order' here instead of using set_sort()
+            df_results = screener.screener_view(order=sort_key)
         except Exception as e:
             st.error(f"Finviz Error: {e}")
             df_results = pd.DataFrame()
@@ -189,16 +196,18 @@ if page == "🔍 Market Scanner":
                 with col1:
                     st.write(f"**{row['Ticker']}**")
                 with col2:
-                    st.write(f"${row['Price']}")
+                    # Handle missing Price column gracefully
+                    p = row.get('Price', 'N/A')
+                    st.write(f"${p}")
                 with col3:
                     st.write(f"P/E: {row.get('P/E', 'N/A')}")
                 with col4:
                     st.write(f"P/B: {row.get('P/B', 'N/A')}")
                 with col5:
                     # THE MAGIC BUTTON
-                    # We use a unique key for each button so Streamlit doesn't get confused
                     if st.button(f"Add {row['Ticker']}", key=f"add_{row['Ticker']}"):
-                        if save_to_portfolio(row['Ticker'], row['Price']):
+                        current_p = row.get('Price', 0)
+                        if save_to_portfolio(row['Ticker'], current_p):
                             st.toast(f"✅ Added {row['Ticker']} to Portfolio!")
                         else:
                             st.toast(f"⚠️ {row['Ticker']} is already in portfolio.")
