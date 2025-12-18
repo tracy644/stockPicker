@@ -110,8 +110,7 @@ if page == "🔍 Market Scanner":
         "2. Sort Market By (Fixes 'Alphabetical' issue):",
         ["Lowest P/E (Cheapest Earnings)", 
          "Lowest P/B (Cheapest Assets)", 
-         "Worst Performance (Biggest Discount)", 
-         "Highest Volume (Most Active)"]
+         "Worst Performance (Biggest Discount)"]
     )
 
     # Manual Filters
@@ -163,19 +162,17 @@ if page == "🔍 Market Scanner":
         if filters_dict:
             screener.set_filter(filters_dict=filters_dict)
         
-        # --- THE FIX: Pass Sort Order to screener_view ---
-        # Map user text to Finviz URL codes
+        # --- THE FIX: USE EXACT STRINGS FROM ERROR LOG ---
         sort_map = {
-            "Lowest P/E (Cheapest Earnings)": "pe",
-            "Lowest P/B (Cheapest Assets)": "pb",
-            "Worst Performance (Biggest Discount)": "perf",
-            "Highest Volume (Most Active)": "-volume" # Minus means descending (High to low)
+            "Lowest P/E (Cheapest Earnings)": "Price/Earnings",
+            "Lowest P/B (Cheapest Assets)": "Price/Book",
+            "Worst Performance (Biggest Discount)": "Performance (Year)"
         }
         
-        sort_key = sort_map.get(sort_criteria, 'pe') # Default to P/E if error
+        sort_key = sort_map.get(sort_criteria, 'Price/Earnings')
 
         try:
-            # We pass 'order' here instead of using set_sort()
+            # We pass 'order' here. 
             df_results = screener.screener_view(order=sort_key)
         except Exception as e:
             st.error(f"Finviz Error: {e}")
@@ -188,15 +185,12 @@ if page == "🔍 Market Scanner":
             st.write("### Scan Results")
             st.write("Click 'Add' to save to your portfolio.")
             
-            # We iterate through the rows to create buttons
-            # We use columns to make the layout look like a table
             for index, row in df_results.head(max_stocks).iterrows():
                 col1, col2, col3, col4, col5 = st.columns([1, 2, 1, 1, 1])
                 
                 with col1:
                     st.write(f"**{row['Ticker']}**")
                 with col2:
-                    # Handle missing Price column gracefully
                     p = row.get('Price', 'N/A')
                     st.write(f"${p}")
                 with col3:
@@ -204,7 +198,6 @@ if page == "🔍 Market Scanner":
                 with col4:
                     st.write(f"P/B: {row.get('P/B', 'N/A')}")
                 with col5:
-                    # THE MAGIC BUTTON
                     if st.button(f"Add {row['Ticker']}", key=f"add_{row['Ticker']}"):
                         current_p = row.get('Price', 0)
                         if save_to_portfolio(row['Ticker'], current_p):
@@ -235,17 +228,13 @@ elif page == "📈 My Portfolio":
         results = []
         progress = st.progress(0)
         
-        # Loop through your saved stocks
         for i, (index, row) in enumerate(df_portfolio.iterrows()):
             ticker = row['Ticker']
             progress.progress((i + 1) / len(df_portfolio))
             
-            # Fetch real-time performance
             cur_price, chg_1w, chg_1m = get_performance_data(ticker)
             
-            # Calculate Total Return since you added it
             price_added = float(row['Price Added'])
-            
             if price_added > 0:
                 total_return = ((cur_price - price_added) / price_added) * 100
             else:
@@ -261,14 +250,12 @@ elif page == "📈 My Portfolio":
                 "Date Added": row['Date Added']
             })
             
-            time.sleep(0.1) # Be polite to the API
+            time.sleep(0.1) 
             
         progress.empty()
         
-        # Display the Portfolio Table
         res_df = pd.DataFrame(results)
         
-        # Formatting with Color for Returns
         st.dataframe(
             res_df,
             column_config={
@@ -283,7 +270,6 @@ elif page == "📈 My Portfolio":
             hide_index=True
         )
         
-        # Delete functionality
         st.subheader("Manage Portfolio")
         to_remove = st.selectbox("Select stock to remove:", ["Select..."] + list(df_portfolio['Ticker']))
         if st.button("Remove Stock"):
