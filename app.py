@@ -31,18 +31,16 @@ def load_portfolio():
 
 def save_to_portfolio(ticker, current_price):
     df = load_portfolio()
-    
-    # Robust Float Conversion
     try:
-        price_float = float(current_price)
+        current_price = float(current_price)
     except:
-        price_float = 0.0
+        current_price = 0.0
         
     if ticker not in df['Ticker'].values:
         new_row = pd.DataFrame({
             'Ticker': [ticker], 
             'Date Added': [datetime.now().strftime("%Y-%m-%d")],
-            'Price Added': [price_float]
+            'Price Added': [current_price]
         })
         df = pd.concat([df, new_row], ignore_index=True)
         df.to_csv('my_portfolio.csv', index=False)
@@ -63,12 +61,10 @@ def get_performance_data(ticker):
     change_1w = 0.0
     change_1m = 0.0
     
-    # 1. Try to get CURRENT PRICE (The most important part)
+    # 1. Try to get CURRENT PRICE
     try:
-        # fast_info is much more reliable/faster than .history()
         current_price = stock.fast_info['last_price']
     except:
-        # Fallback to history if fast_info fails
         try:
             hist_day = stock.history(period="1d")
             if not hist_day.empty:
@@ -76,11 +72,10 @@ def get_performance_data(ticker):
         except:
             current_price = 0.0
 
-    # 2. Try to get HISTORICAL CHANGE (Bonus data)
+    # 2. Try to get HISTORICAL CHANGE
     try:
         hist = stock.history(period="2mo")
         if not hist.empty:
-            # We use the 'current_price' we found above, or the latest close
             if current_price == 0:
                 current_price = hist['Close'].iloc[-1]
             
@@ -99,7 +94,7 @@ def get_performance_data(ticker):
             if price_1m > 0:
                 change_1m = ((current_price - price_1m) / price_1m) * 100
     except:
-        pass # If history fails, we at least return the current price we found
+        pass 
 
     return current_price, change_1w, change_1m
 
@@ -143,7 +138,6 @@ if page == "🔍 Market Scanner":
 
     max_stocks = st.sidebar.slider("Max Stocks to Analyze", 5, 20, 10)
 
-    # Session State
     if 'scan_results' not in st.session_state:
         st.session_state['scan_results'] = None
 
@@ -200,12 +194,8 @@ if page == "🔍 Market Scanner":
                 for i, (index, row) in enumerate(subset.iterrows()):
                     progress.progress((i + 1) / len(subset))
                     
-                    # Fetch 52 Week Data
                     discount_str = "-"
-                    
-                    # Robust Price Fetching
                     try:
-                        # Try to get price from Finviz first (it's in the row)
                         finviz_price = float(row.get('Price', 0))
                     except:
                         finviz_price = 0.0
@@ -213,8 +203,6 @@ if page == "🔍 Market Scanner":
                     try:
                         tinfo = yf.Ticker(row['Ticker']).info
                         high_52 = tinfo.get('fiftyTwoWeekHigh', 0)
-                        
-                        # Use YFinance price if available, else Finviz price
                         curr_p = tinfo.get('currentPrice', finviz_price)
                         if curr_p == 0: curr_p = finviz_price
 
@@ -222,12 +210,11 @@ if page == "🔍 Market Scanner":
                             disc = ((high_52 - curr_p) / high_52) * 100
                             discount_str = f"🔻 {disc:.1f}%"
                     except:
-                        # Fallback
                         curr_p = finviz_price
 
                     enriched_data.append({
                         'Ticker': row['Ticker'],
-                        'Price': curr_p, # Save the numeric price
+                        'Price': curr_p,
                         'P/E': row.get('P/E', '-'),
                         'P/B': row.get('P/B', '-'),
                         'Discount_Str': discount_str
@@ -246,7 +233,6 @@ if page == "🔍 Market Scanner":
             st.error(f"Finviz Error: {e}")
             st.session_state['scan_results'] = pd.DataFrame()
 
-    # --- DISPLAY RESULTS ---
     if st.session_state['scan_results'] is not None and not st.session_state['scan_results'].empty:
         
         df_display = st.session_state['scan_results']
@@ -271,7 +257,6 @@ if page == "🔍 Market Scanner":
             c4.write(f"{row['P/E']}")
             c5.write(f"{row['P/B']}")
             
-            # Callback
             def add_stock_callback(t, p):
                 if save_to_portfolio(t, p):
                     st.toast(f"✅ Saved {t}!")
@@ -312,20 +297,23 @@ elif page == "📈 My Portfolio":
             except:
                 price_added = 0.0
             
-            # Use current price if price added was somehow 0 (fallback)
             if price_added == 0 and cur_price > 0:
                 price_added = cur_price
 
+            # --- CALCULATE GAINS ---
             if price_added > 0 and cur_price > 0:
-                total_return = ((cur_price - price_added) / price_added) * 100
+                gain_loss_abs = cur_price - price_added
+                gain_loss_pct = (gain_loss_abs / price_added) * 100
             else:
-                total_return = 0
+                gain_loss_abs = 0.0
+                gain_loss_pct = 0.0
             
             results.append({
                 "Ticker": ticker,
                 "Current Price": cur_price,
-                "Price Added": price_added,
-                "Total Return": total_return,
+                "Cost Basis": price_added,
+                "Gain/Loss $": gain_loss_abs, # New Column
+                "Gain/Loss %": gain_loss_pct, # Renamed Column
                 "1 Week %": chg_1w,
                 "1 Month %": chg_1m,
                 "Date Added": row['Date Added']
@@ -341,8 +329,10 @@ elif page == "📈 My Portfolio":
             column_config={
                 "Ticker": "Symbol",
                 "Current Price": st.column_config.NumberColumn("Current Price", format="$%.2f"),
-                "Price Added": st.column_config.NumberColumn("Cost Basis", format="$%.2f"),
-                "Total Return": st.column_config.NumberColumn("Total Return", format="%.2f%%"),
+                "Cost Basis": st.column_config.NumberColumn("Cost Basis", format="$%.2f"),
+                # NEW COLUMNS HERE
+                "Gain/Loss $": st.column_config.NumberColumn("Gain/Loss $", format="$%.2f"),
+                "Gain/Loss %": st.column_config.NumberColumn("Gain/Loss %", format="%.2f%%"),
                 "1 Week %": st.column_config.NumberColumn("1 Week Chg", format="%.2f%%"),
                 "1 Month %": st.column_config.NumberColumn("1 Month Chg", format="%.2f%%"),
             },
