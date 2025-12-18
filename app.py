@@ -21,21 +21,16 @@ def download_textblob_corpora():
 
 download_textblob_corpora()
 
-# --- 2. HELPER FUNCTIONS FOR SAVING DATA ---
+# --- 2. HELPER FUNCTIONS ---
 
 def load_portfolio():
-    """Loads the portfolio from a CSV file."""
     if os.path.exists('my_portfolio.csv'):
         return pd.read_csv('my_portfolio.csv')
     else:
-        # Create an empty dataframe if file doesn't exist
         return pd.DataFrame(columns=['Ticker', 'Date Added', 'Price Added'])
 
 def save_to_portfolio(ticker, current_price):
-    """Saves a new stock to the CSV file."""
     df = load_portfolio()
-    
-    # Check if already exists
     if ticker not in df['Ticker'].values:
         new_row = pd.DataFrame({
             'Ticker': [ticker], 
@@ -48,40 +43,31 @@ def save_to_portfolio(ticker, current_price):
     return False
 
 def remove_from_portfolio(ticker):
-    """Removes a stock from the CSV file."""
     df = load_portfolio()
     df = df[df['Ticker'] != ticker]
     df.to_csv('my_portfolio.csv', index=False)
 
 def get_performance_data(ticker):
-    """Fetches 1-week and 1-month performance data."""
     try:
         stock = yf.Ticker(ticker)
-        # Fetch 2 months of history to ensure we have enough data points
         hist = stock.history(period="2mo")
+        if hist.empty: return None
         
-        if hist.empty:
-            return None
-
         current_price = hist['Close'].iloc[-1]
         
-        # Get date for 1 week ago
-        week_ago_date = datetime.now() - timedelta(days=7)
-        # Find nearest trading day index
-        week_idx = hist.index.get_indexer([week_ago_date], method='nearest')[0]
+        week_ago = datetime.now() - timedelta(days=7)
+        week_idx = hist.index.get_indexer([week_ago], method='nearest')[0]
         price_1w = hist['Close'].iloc[week_idx]
         
-        # Get date for 1 month ago
-        month_ago_date = datetime.now() - timedelta(days=30)
-        month_idx = hist.index.get_indexer([month_ago_date], method='nearest')[0]
+        month_ago = datetime.now() - timedelta(days=30)
+        month_idx = hist.index.get_indexer([month_ago], method='nearest')[0]
         price_1m = hist['Close'].iloc[month_idx]
 
-        # Calculate % changes
         change_1w = ((current_price - price_1w) / price_1w) * 100
         change_1m = ((current_price - price_1m) / price_1m) * 100
         
         return current_price, change_1w, change_1m
-    except Exception:
+    except:
         return 0, 0, 0
 
 # --- 3. APP NAVIGATION ---
@@ -89,12 +75,11 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to:", ["🔍 Market Scanner", "📈 My Portfolio"])
 
 # ==========================================
-# PAGE 1: MARKET SCANNER (The Original Tool)
+# PAGE 1: MARKET SCANNER
 # ==========================================
 if page == "🔍 Market Scanner":
     st.title("🌍 True Market Scanner")
     
-    # --- SCANNER SETTINGS ---
     st.sidebar.markdown("---")
     st.sidebar.header("Scanner Settings")
     
@@ -107,13 +92,12 @@ if page == "🔍 Market Scanner":
     )
     
     sort_criteria = st.sidebar.selectbox(
-        "2. Sort Market By (Fixes 'Alphabetical' issue):",
+        "2. Sort Market By:",
         ["Lowest P/E (Cheapest Earnings)", 
          "Lowest P/B (Cheapest Assets)", 
          "Worst Performance (Biggest Discount)"]
     )
 
-    # Manual Filters
     sector_list = ["Any", "Basic Materials", "Communication Services", "Consumer Cyclical", "Consumer Defensive", "Energy", "Financial", "Healthcare", "Industrials", "Real Estate", "Technology", "Utilities"]
     sector_option = st.sidebar.selectbox("Sector", sector_list, index=0)
     
@@ -126,10 +110,9 @@ if page == "🔍 Market Scanner":
 
     max_stocks = st.sidebar.slider("Max Stocks to Analyze", 5, 20, 10)
 
-    # --- SCANNER LOGIC ---
     if st.button("Run Scan", type="primary"):
         status = st.empty()
-        status.info("Scanning Market...")
+        status.info("Step 1: Screening Market via Finviz...")
         
         filters_dict = {}
         
@@ -157,68 +140,94 @@ if page == "🔍 Market Scanner":
             filters_dict['Performance'] = 'Today Up'
             if mc_option != "Any": filters_dict['Market Cap.'] = mc_option
 
-        # Run Finviz
         screener = Valuation()
         if filters_dict:
             screener.set_filter(filters_dict=filters_dict)
         
-        # --- THE FIX: USE EXACT STRINGS FROM ERROR LOG ---
+        # Map Sort Keys
         sort_map = {
             "Lowest P/E (Cheapest Earnings)": "Price/Earnings",
             "Lowest P/B (Cheapest Assets)": "Price/Book",
             "Worst Performance (Biggest Discount)": "Performance (Year)"
         }
-        
         sort_key = sort_map.get(sort_criteria, 'Price/Earnings')
 
         try:
-            # We pass 'order' here. 
             df_results = screener.screener_view(order=sort_key)
         except Exception as e:
             st.error(f"Finviz Error: {e}")
             df_results = pd.DataFrame()
 
         if not df_results.empty:
-            status.success(f"Found {len(df_results)} stocks.")
+            status.info(f"Step 2: Found {len(df_results)} stocks. Fetching 52-Week High data...")
             
-            # --- DISPLAY RESULTS WITH "ADD" BUTTONS ---
-            st.write("### Scan Results")
-            st.write("Click 'Add' to save to your portfolio.")
+            # --- DISPLAY WITH 52-WEEK HIGH CALCULATION ---
+            # We use columns to create a table header
+            h1, h2, h3, h4, h5, h6 = st.columns([1, 1, 1.5, 1, 1, 1])
+            h1.markdown("**Ticker**")
+            h2.markdown("**Price**")
+            h3.markdown("**52W Discount**") # <--- New Header
+            h4.markdown("**P/E**")
+            h5.markdown("**P/B**")
+            h6.markdown("**Action**")
+            st.divider()
             
-            for index, row in df_results.head(max_stocks).iterrows():
-                col1, col2, col3, col4, col5 = st.columns([1, 2, 1, 1, 1])
+            progress = st.progress(0)
+            
+            # Limit results
+            subset = df_results.head(max_stocks)
+            
+            for i, (index, row) in enumerate(subset.iterrows()):
+                progress.progress((i + 1) / len(subset))
                 
-                with col1:
-                    st.write(f"**{row['Ticker']}**")
-                with col2:
-                    p = row.get('Price', 'N/A')
-                    st.write(f"${p}")
-                with col3:
-                    st.write(f"P/E: {row.get('P/E', 'N/A')}")
-                with col4:
-                    st.write(f"P/B: {row.get('P/B', 'N/A')}")
-                with col5:
-                    if st.button(f"Add {row['Ticker']}", key=f"add_{row['Ticker']}"):
-                        current_p = row.get('Price', 0)
-                        if save_to_portfolio(row['Ticker'], current_p):
-                            st.toast(f"✅ Added {row['Ticker']} to Portfolio!")
-                        else:
-                            st.toast(f"⚠️ {row['Ticker']} is already in portfolio.")
-                st.divider()
+                # Fetch Real-Time 52-Week Data
+                try:
+                    ticker_info = yf.Ticker(row['Ticker']).info
+                    high_52 = ticker_info.get('fiftyTwoWeekHigh', 0)
+                    current_p = ticker_info.get('currentPrice', row.get('Price', 0))
+                    
+                    if high_52 and high_52 > 0:
+                        discount = ((high_52 - current_p) / high_52) * 100
+                        discount_str = f"🔻 {discount:.1f}% off High"
+                    else:
+                        discount_str = "N/A"
+                except:
+                    current_p = row.get('Price', 0)
+                    discount_str = "N/A"
+
+                # Display Row
+                c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1.5, 1, 1, 1])
+                
+                c1.write(f"**{row['Ticker']}**")
+                c2.write(f"${current_p}")
+                c3.write(f"**{discount_str}**") # <--- Display Discount
+                c4.write(f"{row.get('P/E', '-')}")
+                c5.write(f"{row.get('P/B', '-')}")
+                
+                if c6.button(f"Add", key=f"add_{row['Ticker']}"):
+                    if save_to_portfolio(row['Ticker'], current_p):
+                        st.toast(f"✅ Saved {row['Ticker']}")
+                    else:
+                        st.toast(f"⚠️ Already saved")
+                
+                time.sleep(0.1) # Prevent blocking
+                
+            status.success("Scan Complete!")
+            progress.empty()
+            
         else:
             status.warning("No stocks found.")
 
 # ==========================================
-# PAGE 2: MY PORTFOLIO (The Tracker)
+# PAGE 2: MY PORTFOLIO
 # ==========================================
 elif page == "📈 My Portfolio":
     st.title("📈 My Stock Tracker")
-    st.markdown("Track the performance of your saved stocks over time.")
     
     df_portfolio = load_portfolio()
     
     if df_portfolio.empty:
-        st.info("Your portfolio is empty. Go to the **Scanner** and add some stocks!")
+        st.info("Your portfolio is empty. Go to the **Scanner** to find stocks.")
     else:
         if st.button("🔄 Refresh Prices"):
             st.rerun()
@@ -249,8 +258,7 @@ elif page == "📈 My Portfolio":
                 "1 Month %": chg_1m,
                 "Date Added": row['Date Added']
             })
-            
-            time.sleep(0.1) 
+            time.sleep(0.1)
             
         progress.empty()
         
