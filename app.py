@@ -31,16 +31,18 @@ def load_portfolio():
 
 def save_to_portfolio(ticker, current_price):
     df = load_portfolio()
+    
+    # Robust Float Conversion
     try:
-        current_price = float(current_price)
+        price_float = float(current_price)
     except:
-        current_price = 0.0
+        price_float = 0.0
         
     if ticker not in df['Ticker'].values:
         new_row = pd.DataFrame({
             'Ticker': [ticker], 
             'Date Added': [datetime.now().strftime("%Y-%m-%d")],
-            'Price Added': [current_price]
+            'Price Added': [price_float]
         })
         df = pd.concat([df, new_row], ignore_index=True)
         df.to_csv('my_portfolio.csv', index=False)
@@ -53,27 +55,53 @@ def remove_from_portfolio(ticker):
     df.to_csv('my_portfolio.csv', index=False)
 
 def get_performance_data(ticker):
+    """
+    Robust fetcher that tries multiple ways to get data.
+    """
+    stock = yf.Ticker(ticker)
+    current_price = 0.0
+    change_1w = 0.0
+    change_1m = 0.0
+    
+    # 1. Try to get CURRENT PRICE (The most important part)
     try:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="2mo")
-        if hist.empty: return None
-        
-        current_price = hist['Close'].iloc[-1]
-        
-        week_ago = datetime.now() - timedelta(days=7)
-        week_idx = hist.index.get_indexer([week_ago], method='nearest')[0]
-        price_1w = hist['Close'].iloc[week_idx]
-        
-        month_ago = datetime.now() - timedelta(days=30)
-        month_idx = hist.index.get_indexer([month_ago], method='nearest')[0]
-        price_1m = hist['Close'].iloc[month_idx]
-
-        change_1w = ((current_price - price_1w) / price_1w) * 100
-        change_1m = ((current_price - price_1m) / price_1m) * 100
-        
-        return current_price, change_1w, change_1m
+        # fast_info is much more reliable/faster than .history()
+        current_price = stock.fast_info['last_price']
     except:
-        return 0, 0, 0
+        # Fallback to history if fast_info fails
+        try:
+            hist_day = stock.history(period="1d")
+            if not hist_day.empty:
+                current_price = hist_day['Close'].iloc[-1]
+        except:
+            current_price = 0.0
+
+    # 2. Try to get HISTORICAL CHANGE (Bonus data)
+    try:
+        hist = stock.history(period="2mo")
+        if not hist.empty:
+            # We use the 'current_price' we found above, or the latest close
+            if current_price == 0:
+                current_price = hist['Close'].iloc[-1]
+            
+            # 1 Week Ago
+            week_ago = datetime.now() - timedelta(days=7)
+            week_idx = hist.index.get_indexer([week_ago], method='nearest')[0]
+            price_1w = hist['Close'].iloc[week_idx]
+            
+            # 1 Month Ago
+            month_ago = datetime.now() - timedelta(days=30)
+            month_idx = hist.index.get_indexer([month_ago], method='nearest')[0]
+            price_1m = hist['Close'].iloc[month_idx]
+
+            if price_1w > 0:
+                change_1w = ((current_price - price_1w) / price_1w) * 100
+            if price_1m > 0:
+                change_1m = ((current_price - price_1m) / price_1m) * 100
+    except:
+        pass # If history fails, we at least return the current price we found
+
+    return current_price, change_1w, change_1m
 
 # --- 3. APP NAVIGATION ---
 st.sidebar.title("Navigation")
@@ -115,7 +143,7 @@ if page == "🔍 Market Scanner":
 
     max_stocks = st.sidebar.slider("Max Stocks to Analyze", 5, 20, 10)
 
-    # Initialize session state for results
+    # Session State
     if 'scan_results' not in st.session_state:
         st.session_state['scan_results'] = None
 
@@ -163,7 +191,6 @@ if page == "🔍 Market Scanner":
             df_results = screener.screener_view(order=sort_key)
             
             if not df_results.empty:
-                # --- ENRICH DATA HERE (RUNS ONCE) ---
                 status.info(f"Step 2: Found {len(df_results)} stocks. Calculating Discounts...")
                 
                 enriched_data = []
@@ -175,21 +202,32 @@ if page == "🔍 Market Scanner":
                     
                     # Fetch 52 Week Data
                     discount_str = "-"
+                    
+                    # Robust Price Fetching
+                    try:
+                        # Try to get price from Finviz first (it's in the row)
+                        finviz_price = float(row.get('Price', 0))
+                    except:
+                        finviz_price = 0.0
+
                     try:
                         tinfo = yf.Ticker(row['Ticker']).info
                         high_52 = tinfo.get('fiftyTwoWeekHigh', 0)
-                        curr_p = tinfo.get('currentPrice', row.get('Price', 0))
                         
-                        if high_52 and high_52 > 0:
+                        # Use YFinance price if available, else Finviz price
+                        curr_p = tinfo.get('currentPrice', finviz_price)
+                        if curr_p == 0: curr_p = finviz_price
+
+                        if high_52 and high_52 > 0 and curr_p > 0:
                             disc = ((high_52 - curr_p) / high_52) * 100
                             discount_str = f"🔻 {disc:.1f}%"
                     except:
-                        pass
-                        
-                    # Build Row for Session State
+                        # Fallback
+                        curr_p = finviz_price
+
                     enriched_data.append({
                         'Ticker': row['Ticker'],
-                        'Price': row.get('Price', 0),
+                        'Price': curr_p, # Save the numeric price
                         'P/E': row.get('P/E', '-'),
                         'P/B': row.get('P/B', '-'),
                         'Discount_Str': discount_str
@@ -208,14 +246,13 @@ if page == "🔍 Market Scanner":
             st.error(f"Finviz Error: {e}")
             st.session_state['scan_results'] = pd.DataFrame()
 
-    # --- DISPLAY RESULTS FROM MEMORY ---
+    # --- DISPLAY RESULTS ---
     if st.session_state['scan_results'] is not None and not st.session_state['scan_results'].empty:
         
         df_display = st.session_state['scan_results']
         
         st.write("### Scan Results")
         
-        # Headers
         h1, h2, h3, h4, h5, h6 = st.columns([1, 1, 1.5, 1, 1, 1])
         h1.markdown("**Ticker**")
         h2.markdown("**Price**")
@@ -230,11 +267,11 @@ if page == "🔍 Market Scanner":
             
             c1.write(f"**{row['Ticker']}**")
             c2.write(f"${row['Price']}")
-            c3.write(f"**{row['Discount_Str']}**") # <--- Shows calculated value
+            c3.write(f"**{row['Discount_Str']}**")
             c4.write(f"{row['P/E']}")
             c5.write(f"{row['P/B']}")
             
-            # CALLBACK FUNCTION
+            # Callback
             def add_stock_callback(t, p):
                 if save_to_portfolio(t, p):
                     st.toast(f"✅ Saved {t}!")
@@ -274,7 +311,11 @@ elif page == "📈 My Portfolio":
                 price_added = float(row['Price Added'])
             except:
                 price_added = 0.0
-                
+            
+            # Use current price if price added was somehow 0 (fallback)
+            if price_added == 0 and cur_price > 0:
+                price_added = cur_price
+
             if price_added > 0 and cur_price > 0:
                 total_return = ((cur_price - price_added) / price_added) * 100
             else:
