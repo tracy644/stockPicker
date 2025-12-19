@@ -423,7 +423,7 @@ elif page == "⚖️ Stock Analyst":
                     # 2. CASH FLOW (EV/FCF)
                     c1, c2, c3 = st.columns([2, 1, 2])
                     val_a = f"{da['ev_fcf']:.1f}x" if da['ev_fcf'] > 0 else "N/A"
-                    val_b = f"{db['ev_fcf']:.1f}x" if db['db_fcf'] if 'db_fcf' in locals() else f"{db['ev_fcf']:.1f}x" if db['ev_fcf'] > 0 else "N/A"
+                    val_b = f"{db['ev_fcf']:.1f}x" if db['ev_fcf'] > 0 else "N/A"
                     
                     c1.metric("EV / Free Cash Flow", val_a, help="Lower is better. Measures price relative to real cash generated.")
                     c3.metric("EV / Free Cash Flow", val_b)
