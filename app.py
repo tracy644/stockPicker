@@ -81,27 +81,54 @@ def get_performance_data(ticker):
     return current_price, change_1w, change_1m
 
 def get_stock_data_safe(ticker):
-    """Fetches stock info safely."""
+    """Fetches comprehensive stock info safely."""
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
         
-        # We try to get the Long Name, if not, Short Name, if not, Ticker
         name = info.get('longName', info.get('shortName', ticker))
         
+        # --- CALCULATE ADVANCED METRICS ---
+        
+        # 1. Net Debt / EBITDA
+        total_debt = info.get('totalDebt', 0)
+        total_cash = info.get('totalCash', 0)
+        ebitda = info.get('ebitda', 0)
+        
+        if ebitda and ebitda > 0:
+            net_debt = total_debt - total_cash
+            debt_ebitda = net_debt / ebitda
+        else:
+            debt_ebitda = 0 # N/A
+            
+        # 2. EV / FCF
+        ev = info.get('enterpriseValue', 0)
+        fcf = info.get('freeCashFlow', 0)
+        
+        if fcf and fcf > 0:
+            ev_fcf = ev / fcf
+        else:
+            ev_fcf = 0 # N/A or Negative Cash Flow
+            
         data = {
             'ticker': ticker,
-            'name': name,  # <--- NEW FIELD
+            'name': name,
             'price': info.get('currentPrice', 0),
             'sector': info.get('sector', 'Unknown'),
             'pe': info.get('trailingPE', 0),
             'pb': info.get('priceToBook', 0),
-            'mc': info.get('marketCap', 0)
+            'mc': info.get('marketCap', 0),
+            # NEW METRICS
+            'revenue_growth': info.get('revenueGrowth', 0), # Percentage
+            'operating_margin': info.get('operatingMargins', 0), # Percentage
+            'debt_ebitda': debt_ebitda,
+            'ev_fcf': ev_fcf
         }
-        # Fix Nones
-        if data['pe'] is None: data['pe'] = 0
-        if data['pb'] is None: data['pb'] = 0
         
+        # Clean Nones
+        for k, v in data.items():
+            if v is None: data[k] = 0
+            
         return data
     except:
         return None
@@ -321,11 +348,11 @@ elif page == "📈 My Portfolio":
                 st.rerun()
 
 # ==========================================
-# PAGE: STOCK ANALYST (HEAD-TO-HEAD)
+# PAGE: STOCK ANALYST (ADVANCED)
 # ==========================================
 elif page == "⚖️ Stock Analyst":
-    st.title("⚖️ Comparative Analyst")
-    st.write("Compare one or two stocks to see which is the better deal.")
+    st.title("⚖️ Pro Comparative Analyst")
+    st.write("Head-to-Head Comparison with Advanced Metrics")
     
     c1, c2 = st.columns(2)
     with c1:
@@ -340,10 +367,8 @@ elif page == "⚖️ Stock Analyst":
             tickers = [ticker_a]
             if ticker_b: tickers.append(ticker_b)
             
-            # Data Container
             stock_data = {}
-            
-            with st.spinner("Fetching data..."):
+            with st.spinner("Crunching Advanced Metrics (Cash Flow, Debt, Margins)..."):
                 for t in tickers:
                     data = get_stock_data_safe(t)
                     if data:
@@ -351,116 +376,140 @@ elif page == "⚖️ Stock Analyst":
                     else:
                         st.error(f"Could not find {t}")
             
-            # If we have valid data
             if stock_data:
-                
-                # --- SINGLE STOCK MODE ---
-                if len(stock_data) == 1:
-                    d = stock_data[ticker_a]
-                    st.subheader(f"Analysis: {d['ticker']}")
-                    st.write(f"**Company:** {d['name']}") # <--- NEW
-                    
-                    avg_pe, avg_pb = get_sector_averages(d['sector'])
-                    
-                    col1, col2, col3 = st.columns(3)
-                    
-                    # P/E
-                    if d['pe'] > 0:
-                        diff = ((d['pe'] - avg_pe)/avg_pe)*100 if avg_pe > 0 else 0
-                        col1.metric("P/E Ratio", f"{d['pe']:.2f}", f"{diff:.1f}% vs Sector", delta_color="inverse")
-                    else:
-                        col1.metric("P/E Ratio", "Unprofitable", "No Earnings", delta_color="off")
-                        
-                    # P/B
-                    diff_pb = ((d['pb'] - avg_pb)/avg_pb)*100 if avg_pb > 0 else 0
-                    col2.metric("P/B Ratio", f"{d['pb']:.2f}", f"{diff_pb:.1f}% vs Sector", delta_color="inverse")
-                    
-                    col3.metric("Sector", d['sector'])
-                    
-                    if st.button(f"Add {ticker_a}"):
-                        save_to_portfolio(ticker_a, d['price'])
-                        st.toast("Saved!")
-
                 # --- COMPARISON MODE ---
-                elif len(stock_data) == 2:
+                if len(stock_data) == 2:
                     da = stock_data[ticker_a]
                     db = stock_data[ticker_b]
                     
                     st.divider()
-                    st.subheader(f"⚔️ Face-Off: {ticker_a} vs {ticker_b}")
+                    st.subheader(f"⚔️ Face-Off: {da['name']} vs {db['name']}")
                     
                     colA, colB = st.columns(2)
-                    
-                    # Score Counters
-                    score_a = 0
-                    score_b = 0
+                    score_a, score_b = 0, 0
                     
                     with colA:
                         st.markdown(f"### {da['ticker']}")
-                        st.markdown(f"**{da['name']}**") # <--- NEW
-                        st.write(f"**Sector:** {da['sector']}")
-                        st.write(f"**Price:** ${da['price']}")
-                        
-                        if da['pe'] > 0: st.write(f"**P/E:** {da['pe']:.2f}")
-                        else: st.write("**P/E:** Unprofitable")
-                        
-                        st.write(f"**P/B:** {da['pb']:.2f}")
-
+                        st.write(f"Price: **${da['price']}**")
+                        st.write(f"Sector: {da['sector']}")
                     with colB:
                         st.markdown(f"### {db['ticker']}")
-                        st.markdown(f"**{db['name']}**") # <--- NEW
-                        st.write(f"**Sector:** {db['sector']}")
-                        st.write(f"**Price:** ${db['price']}")
-                        
-                        if db['pe'] > 0: st.write(f"**P/E:** {db['pe']:.2f}")
-                        else: st.write("**P/E:** Unprofitable")
-                        
-                        st.write(f"**P/B:** {db['pb']:.2f}")
+                        st.write(f"Price: **${db['price']}**")
+                        st.write(f"Sector: {db['sector']}")
 
-                    st.divider()
-                    st.write("### 🏆 The Verdict")
-                    
-                    # 1. P/E BATTLE
+                    st.markdown("---")
+                    st.write("### 📊 Fundamental Breakdown")
+
+                    # 1. VALUATION (P/E & P/B)
+                    c1, c2, c3 = st.columns([2, 1, 2])
+                    c1.metric("P/E Ratio", f"{da['pe']:.2f}")
+                    c3.metric("P/E Ratio", f"{db['pe']:.2f}")
                     if da['pe'] > 0 and db['pe'] > 0:
-                        if da['pe'] < db['pe']:
-                            st.success(f"✅ **Earnings Value**: {da['ticker']} is cheaper (P/E {da['pe']:.1f} vs {db['pe']:.1f})")
+                        if da['pe'] < db['pe']: 
+                            c2.success(f"👈 {da['ticker']} Cheaper")
                             score_a += 1
-                        else:
-                            st.success(f"✅ **Earnings Value**: {db['ticker']} is cheaper (P/E {db['pe']:.1f} vs {da['pe']:.1f})")
+                        else: 
+                            c2.success(f"{db['ticker']} Cheaper 👉")
                             score_b += 1
-                    elif da['pe'] > 0:
-                        st.success(f"✅ **Profitability**: {da['ticker']} has earnings, {db['ticker']} does not.")
+                    elif da['pe'] > 0: 
+                        c2.success(f"👈 {da['ticker']} Profitable")
                         score_a += 1
                     elif db['pe'] > 0:
-                        st.success(f"✅ **Profitability**: {db['ticker']} has earnings, {da['ticker']} does not.")
+                        c2.success(f"{db['ticker']} Profitable 👉")
                         score_b += 1
-                        
-                    # 2. P/B BATTLE
-                    if da['pb'] < db['pb']:
-                        st.success(f"✅ **Asset Value**: {da['ticker']} is selling for closer to book value ({da['pb']:.2f}).")
+
+                    st.divider()
+                    
+                    # 2. CASH FLOW (EV/FCF)
+                    c1, c2, c3 = st.columns([2, 1, 2])
+                    val_a = f"{da['ev_fcf']:.1f}x" if da['ev_fcf'] > 0 else "N/A"
+                    val_b = f"{db['ev_fcf']:.1f}x" if db['db_fcf'] if 'db_fcf' in locals() else f"{db['ev_fcf']:.1f}x" if db['ev_fcf'] > 0 else "N/A"
+                    
+                    c1.metric("EV / Free Cash Flow", val_a, help="Lower is better. Measures price relative to real cash generated.")
+                    c3.metric("EV / Free Cash Flow", val_b)
+                    
+                    if da['ev_fcf'] > 0 and db['ev_fcf'] > 0:
+                        if da['ev_fcf'] < db['ev_fcf']:
+                            c2.success(f"👈 Better Cash Value")
+                            score_a += 1
+                        else:
+                            c2.success(f"Better Cash Value 👉")
+                            score_b += 1
+                    
+                    st.divider()
+
+                    # 3. GROWTH & MARGINS
+                    c1, c2, c3 = st.columns([2, 1, 2])
+                    c1.metric("Revenue Growth", f"{da['revenue_growth']*100:.1f}%")
+                    c3.metric("Revenue Growth", f"{db['revenue_growth']*100:.1f}%")
+                    if da['revenue_growth'] > db['revenue_growth']:
+                        c2.success(f"👈 Faster Growth")
                         score_a += 1
                     else:
-                        st.success(f"✅ **Asset Value**: {db['ticker']} is selling for closer to book value ({db['pb']:.2f}).")
+                        c2.success(f"Faster Growth 👉")
                         score_b += 1
                         
-                    # 3. WINNER DECLARATION
+                    st.write("")
+                    c1, c2, c3 = st.columns([2, 1, 2])
+                    c1.metric("Operating Margin", f"{da['operating_margin']*100:.1f}%")
+                    c3.metric("Operating Margin", f"{db['operating_margin']*100:.1f}%")
+                    if da['operating_margin'] > db['operating_margin']:
+                        c2.success(f"👈 More Efficient")
+                        score_a += 1
+                    else:
+                        c2.success(f"More Efficient 👉")
+                        score_b += 1
+                        
+                    st.divider()
+
+                    # 4. SOLVENCY (DEBT/EBITDA)
+                    c1, c2, c3 = st.columns([2, 1, 2])
+                    c1.metric("Net Debt / EBITDA", f"{da['debt_ebitda']:.2f}", help="Lower is better. Under 3.0 is usually safe.")
+                    c3.metric("Net Debt / EBITDA", f"{db['debt_ebitda']:.2f}")
+                    
+                    # Logic: Lower debt ratio is better
+                    if da['debt_ebitda'] < db['debt_ebitda']:
+                        c2.success(f"👈 Safer Balance Sheet")
+                        score_a += 1
+                    else:
+                        c2.success(f"Safer Balance Sheet 👉")
+                        score_b += 1
+
+                    # WINNER DECLARATION
                     st.markdown("---")
+                    st.write("### 🏆 Final Verdict")
                     if score_a > score_b:
                         st.balloons()
-                        st.header(f"🏅 Winner: {da['ticker']}")
-                        st.write("It is the mathematically better value right now.")
+                        st.success(f"**WINNER: {da['name']} ({score_a} - {score_b})**")
+                        st.write(f"{da['ticker']} wins on fundamentals.")
                     elif score_b > score_a:
                         st.balloons()
-                        st.header(f"🏅 Winner: {db['ticker']}")
-                        st.write("It is the mathematically better value right now.")
+                        st.success(f"**WINNER: {db['name']} ({score_b} - {score_a})**")
+                        st.write(f"{db['ticker']} wins on fundamentals.")
                     else:
-                        st.header("🤝 It's a Tie")
-                        st.write("Both stocks offer similar value propositions.")
-                        
+                        st.warning("It's a Tie! Both companies have mixed strengths.")
+
+                    # Add Buttons
                     c1, c2 = st.columns(2)
-                    if c1.button(f"Add {ticker_a}"):
-                        save_to_portfolio(ticker_a, da['price'])
-                        st.toast(f"Saved {ticker_a}")
-                    if c2.button(f"Add {ticker_b}"):
-                        save_to_portfolio(ticker_b, db['price'])
-                        st.toast(f"Saved {ticker_b}")
+                    if c1.button(f"Add {ticker_a}"): save_to_portfolio(ticker_a, da['price']); st.toast("Saved!")
+                    if c2.button(f"Add {ticker_b}"): save_to_portfolio(ticker_b, db['price']); st.toast("Saved!")
+
+                # --- SINGLE STOCK MODE (Simple View) ---
+                elif len(stock_data) == 1:
+                    d = list(stock_data.values())[0]
+                    st.subheader(f"Analysis: {d['name']}")
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("P/E Ratio", f"{d['pe']:.2f}")
+                    c2.metric("EV / Free Cash Flow", f"{d['ev_fcf']:.1f}x")
+                    c3.metric("Net Debt / EBITDA", f"{d['debt_ebitda']:.2f}")
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Revenue Growth", f"{d['revenue_growth']*100:.1f}%")
+                    c2.metric("Operating Margin", f"{d['operating_margin']*100:.1f}%")
+                    c3.metric("Market Cap", f"${d['mc']/1e9:.1f}B")
+                    
+                    st.write("---")
+                    if st.button(f"Add {d['ticker']}"):
+                        save_to_portfolio(d['ticker'], d['price'])
+                        st.toast("Saved!")
