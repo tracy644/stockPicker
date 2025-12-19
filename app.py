@@ -31,7 +31,6 @@ def load_portfolio():
 
 def save_to_portfolio(ticker, current_price):
     df = load_portfolio()
-    
     try:
         price_float = float(current_price)
     except:
@@ -64,12 +63,10 @@ def get_performance_data(ticker):
         
         hist = stock.history(period="2mo")
         if not hist.empty:
-            # 1 Week Ago
             week_ago = datetime.now() - timedelta(days=7)
             week_idx = hist.index.get_indexer([week_ago], method='nearest')[0]
             price_1w = hist['Close'].iloc[week_idx]
             
-            # 1 Month Ago
             month_ago = datetime.now() - timedelta(days=30)
             month_idx = hist.index.get_indexer([month_ago], method='nearest')[0]
             price_1m = hist['Close'].iloc[month_idx]
@@ -82,6 +79,42 @@ def get_performance_data(ticker):
         pass
         
     return current_price, change_1w, change_1m
+
+def get_stock_data_safe(ticker):
+    """Fetches stock info safely."""
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        
+        data = {
+            'ticker': ticker,
+            'price': info.get('currentPrice', 0),
+            'sector': info.get('sector', 'Unknown'),
+            'pe': info.get('trailingPE', 0),
+            'pb': info.get('priceToBook', 0),
+            'mc': info.get('marketCap', 0)
+        }
+        # Fix Nones
+        if data['pe'] is None: data['pe'] = 0
+        if data['pb'] is None: data['pb'] = 0
+        
+        return data
+    except:
+        return None
+
+def get_sector_averages(sector_name):
+    """Fetches average P/E and P/B for a sector via Finviz."""
+    try:
+        screener = Valuation()
+        screener.set_filter(filters_dict={'Sector': sector_name})
+        sector_df = screener.screener_view()
+        
+        sector_df['P/E'] = pd.to_numeric(sector_df['P/E'], errors='coerce')
+        sector_df['P/B'] = pd.to_numeric(sector_df['P/B'], errors='coerce')
+        
+        return sector_df['P/E'].mean(), sector_df['P/B'].mean()
+    except:
+        return 0, 0
 
 # --- 3. APP NAVIGATION ---
 st.sidebar.title("Navigation")
@@ -116,7 +149,6 @@ if page == "🔍 Market Scanner":
     
     mc_option = st.sidebar.selectbox("Market Cap", ["Any", "Micro ($50mln to $300mln)", "Small ($300mln to $2bln)", "Mid ($2bln to $10bln)", "Large ($10bln to $200bln)"], index=0)
     
-    # Custom Filters
     if strategy == "Custom (Manual)":
         pe_option = st.sidebar.selectbox("P/E Ratio", ["Any", "Under 15", "Under 20", "Under 30"], index=0)
         pb_option = st.sidebar.selectbox("Price/Book", ["Any", "Under 1", "Under 2", "Under 3"], index=0)
@@ -124,7 +156,6 @@ if page == "🔍 Market Scanner":
     
     max_stocks = st.sidebar.slider("Max Stocks to Analyze", 5, 20, 10)
 
-    # Initialize Session State
     if 'scan_results' not in st.session_state:
         st.session_state['scan_results'] = None
 
@@ -212,7 +243,6 @@ if page == "🔍 Market Scanner":
         except Exception as e:
             st.error(f"Error: {e}")
 
-    # Display Results
     if st.session_state['scan_results'] is not None and not st.session_state['scan_results'].empty:
         st.write("### Scan Results")
         h1, h2, h3, h4, h5, h6 = st.columns([1, 1, 1.5, 1, 1, 1])
@@ -287,96 +317,145 @@ elif page == "📈 My Portfolio":
                 st.rerun()
 
 # ==========================================
-# PAGE: STOCK ANALYST
+# PAGE: STOCK ANALYST (HEAD-TO-HEAD)
 # ==========================================
 elif page == "⚖️ Stock Analyst":
     st.title("⚖️ Comparative Analyst")
-    st.write("Enter a ticker to see how it ranks against its sector peers.")
+    st.write("Compare one or two stocks to see which is the better deal.")
     
-    target_ticker = st.text_input("Enter Ticker Symbol:", "").upper()
+    c1, c2 = st.columns(2)
+    with c1:
+        ticker_a = st.text_input("Stock A (e.g. KO)", "").upper()
+    with c2:
+        ticker_b = st.text_input("Stock B (Optional, e.g. PEP)", "").upper()
     
-    if target_ticker:
-        with st.spinner(f"Analyzing {target_ticker}..."):
-            try:
-                # 1. Fetch Target Stock Data
-                stock = yf.Ticker(target_ticker)
-                info = stock.info
-                
-                s_name = info.get('sector', 'Unknown')
-                s_pe = info.get('trailingPE', 0)
-                s_pb = info.get('priceToBook', 0)
-                s_mc = info.get('marketCap', 0)
-                s_price = info.get('currentPrice', 0)
-                
-                # Check for None values from Yahoo
-                if s_pe is None: s_pe = 0
-                if s_pb is None: s_pb = 0
-                
-                if s_name == "Unknown":
-                    st.error("Could not identify sector.")
-                else:
-                    st.subheader(f"Results for {target_ticker} ({s_name} Sector)")
-                    
-                    # 2. Get Sector Averages
-                    screener = Valuation()
-                    screener.set_filter(filters_dict={'Sector': s_name})
-                    sector_df = screener.screener_view()
-                    
-                    # Clean columns
-                    sector_df['P/E'] = pd.to_numeric(sector_df['P/E'], errors='coerce')
-                    sector_df['P/B'] = pd.to_numeric(sector_df['P/B'], errors='coerce')
-                    
-                    avg_pe = sector_df['P/E'].mean()
-                    avg_pb = sector_df['P/B'].mean()
-                    
-                    # 3. Display Metrics
-                    m1, m2, m3 = st.columns(3)
-                    
-                    # P/E Logic
-                    if s_pe > 0:
-                        pe_diff = ((s_pe - avg_pe) / avg_pe) * 100 if avg_pe > 0 else 0
-                        m1.metric("P/E Ratio", f"{s_pe:.2f}", f"{pe_diff:.1f}% vs Sector", delta_color="inverse")
+    if st.button("Analyze & Compare", type="primary"):
+        if not ticker_a:
+            st.warning("Please enter at least Stock A.")
+        else:
+            tickers = [ticker_a]
+            if ticker_b: tickers.append(ticker_b)
+            
+            # Data Container
+            stock_data = {}
+            
+            with st.spinner("Fetching data..."):
+                for t in tickers:
+                    data = get_stock_data_safe(t)
+                    if data:
+                        stock_data[t] = data
                     else:
-                        m1.metric("P/E Ratio", "Unprofitable", "No Earnings", delta_color="off")
+                        st.error(f"Could not find {t}")
+            
+            # If we have valid data
+            if stock_data:
+                
+                # --- SINGLE STOCK MODE ---
+                if len(stock_data) == 1:
+                    d = stock_data[ticker_a]
+                    st.subheader(f"Analysis: {d['ticker']}")
                     
-                    # P/B Logic
-                    pb_diff = ((s_pb - avg_pb) / avg_pb) * 100 if avg_pb > 0 else 0
-                    m2.metric("P/B Ratio", f"{s_pb:.2f}", f"{pb_diff:.1f}% vs Sector", delta_color="inverse")
+                    avg_pe, avg_pb = get_sector_averages(d['sector'])
                     
-                    m3.metric("Market Cap", f"${s_mc/1e9:.1f}B")
+                    col1, col2, col3 = st.columns(3)
                     
-                    # 4. Final Verdict
+                    # P/E
+                    if d['pe'] > 0:
+                        diff = ((d['pe'] - avg_pe)/avg_pe)*100 if avg_pe > 0 else 0
+                        col1.metric("P/E Ratio", f"{d['pe']:.2f}", f"{diff:.1f}% vs Sector", delta_color="inverse")
+                    else:
+                        col1.metric("P/E Ratio", "Unprofitable", "No Earnings", delta_color="off")
+                        
+                    # P/B
+                    diff_pb = ((d['pb'] - avg_pb)/avg_pb)*100 if avg_pb > 0 else 0
+                    col2.metric("P/B Ratio", f"{d['pb']:.2f}", f"{diff_pb:.1f}% vs Sector", delta_color="inverse")
+                    
+                    col3.metric("Sector", d['sector'])
+                    
+                    if st.button(f"Add {ticker_a}"):
+                        save_to_portfolio(ticker_a, d['price'])
+                        st.toast("Saved!")
+
+                # --- COMPARISON MODE ---
+                elif len(stock_data) == 2:
+                    da = stock_data[ticker_a]
+                    db = stock_data[ticker_b]
+                    
+                    st.divider()
+                    st.subheader(f"⚔️ Face-Off: {ticker_a} vs {ticker_b}")
+                    
+                    colA, colB = st.columns(2)
+                    
+                    # Score Counters
+                    score_a = 0
+                    score_b = 0
+                    
+                    with colA:
+                        st.markdown(f"### {da['ticker']}")
+                        st.write(f"**Sector:** {da['sector']}")
+                        st.write(f"**Price:** ${da['price']}")
+                        
+                        # P/E Display
+                        if da['pe'] > 0: st.write(f"**P/E:** {da['pe']:.2f}")
+                        else: st.write("**P/E:** Unprofitable")
+                        
+                        st.write(f"**P/B:** {da['pb']:.2f}")
+
+                    with colB:
+                        st.markdown(f"### {db['ticker']}")
+                        st.write(f"**Sector:** {db['sector']}")
+                        st.write(f"**Price:** ${db['price']}")
+                        
+                        if db['pe'] > 0: st.write(f"**P/E:** {db['pe']:.2f}")
+                        else: st.write("**P/E:** Unprofitable")
+                        
+                        st.write(f"**P/B:** {db['pb']:.2f}")
+
+                    st.divider()
+                    st.write("### 🏆 The Verdict")
+                    
+                    # 1. P/E BATTLE
+                    if da['pe'] > 0 and db['pe'] > 0:
+                        if da['pe'] < db['pe']:
+                            st.success(f"✅ **Earnings Value**: {da['ticker']} is cheaper (P/E {da['pe']:.1f} vs {db['pe']:.1f})")
+                            score_a += 1
+                        else:
+                            st.success(f"✅ **Earnings Value**: {db['ticker']} is cheaper (P/E {db['pe']:.1f} vs {da['pe']:.1f})")
+                            score_b += 1
+                    elif da['pe'] > 0:
+                        st.success(f"✅ **Profitability**: {da['ticker']} has earnings, {db['ticker']} does not.")
+                        score_a += 1
+                    elif db['pe'] > 0:
+                        st.success(f"✅ **Profitability**: {db['ticker']} has earnings, {da['ticker']} does not.")
+                        score_b += 1
+                        
+                    # 2. P/B BATTLE
+                    if da['pb'] < db['pb']:
+                        st.success(f"✅ **Asset Value**: {da['ticker']} is selling for closer to book value ({da['pb']:.2f}).")
+                        score_a += 1
+                    else:
+                        st.success(f"✅ **Asset Value**: {db['ticker']} is selling for closer to book value ({db['pb']:.2f}).")
+                        score_b += 1
+                        
+                    # 3. WINNER DECLARATION
                     st.markdown("---")
-                    st.write("### 📢 Value Verdict")
-                    
-                    reasons = []
-                    score = 0
-                    
-                    # Score P/E
-                    if s_pe > 0 and s_pe < avg_pe: 
-                        reasons.append(f"✅ **Underpriced on Earnings**: P/E is lower than average ({avg_pe:.1f}).")
-                        score += 1
-                    elif s_pe > avg_pe:
-                        reasons.append(f"❌ **Premium Earnings**: Expensive compared to peers.")
+                    if score_a > score_b:
+                        st.balloons()
+                        st.header(f"🏅 Winner: {da['ticker']}")
+                        st.write("It is the mathematically better value right now.")
+                    elif score_b > score_a:
+                        st.balloons()
+                        st.header(f"🏅 Winner: {db['ticker']}")
+                        st.write("It is the mathematically better value right now.")
                     else:
-                        reasons.append(f"⚠️ **Unprofitable**: Company has no earnings (P/E is 0/Negative).")
-                    
-                    # Score P/B
-                    if s_pb > 0 and s_pb < avg_pb:
-                        reasons.append(f"✅ **Asset Bargain**: P/B is lower than average ({avg_pb:.1f}).")
-                        score += 1
-                    elif s_pb > avg_pb:
-                        reasons.append(f"❌ **Expensive Assets**: Paying a premium for assets.")
-
-                    if score == 2: st.success("Strong Value Play")
-                    elif score == 1: st.warning("Mixed Value")
-                    else: st.error("Expensive or Risky")
-                    
-                    for r in reasons: st.write(r)
-                    
-                    if st.button(f"Add {target_ticker} to Portfolio"):
-                        if save_to_portfolio(target_ticker, s_price): 
-                            st.toast("Saved!")
-
-            except Exception as e:
-                st.error(f"Could not analyze ticker. Error: {e}")
+                        st.header("🤝 It's a Tie")
+                        st.write("Both stocks offer similar value propositions.")
+                        
+                    # Add Buttons
+                    c1, c2 = st.columns(2)
+                    if c1.button(f"Add {ticker_a}"):
+                        save_to_portfolio(ticker_a, da['price'])
+                        st.toast(f"Saved {ticker_a}")
+                    if c2.button(f"Add {ticker_b}"):
+                        save_to_portfolio(ticker_b, db['price'])
+                        st.toast(f"Saved {ticker_b}")
