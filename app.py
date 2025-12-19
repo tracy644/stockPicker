@@ -129,6 +129,7 @@ if page == "🔍 Market Scanner":
                         if h52 > 0: disc_str = f"🔻 {((h52 - curr) / h52) * 100:.1f}%"
                     except: curr = float(row.get('Price', 0))
                     enriched.append({'Ticker': row['Ticker'], 'Price': curr, 'P/E': row.get('P/E', '-'), 'P/B': row.get('P/B', '-'), 'Discount_Str': disc_str})
+                    time.sleep(0.1)
                 st.session_state['scan_results'] = pd.DataFrame(enriched)
                 status.success("Scan Complete!")
             else: st.session_state['scan_results'] = pd.DataFrame()
@@ -171,13 +172,13 @@ elif page == "📈 My Portfolio":
             if to_rem != "Select...": remove_from_portfolio(to_rem); st.rerun()
 
 # ==========================================
-# PAGE: STOCK ANALYST (NEW!)
+# PAGE: STOCK ANALYST
 # ==========================================
 elif page == "⚖️ Stock Analyst":
     st.title("⚖️ Comparative Analyst")
     st.write("Enter a ticker to see how it ranks against its sector peers.")
     
-    target_ticker = st.text_input("Enter Ticker Symbol (e.g. AAPL, TSLA, INTC):", "").upper()
+    target_ticker = st.text_input("Enter Ticker Symbol:", "").upper()
     
     if target_ticker:
         with st.spinner(f"Analyzing {target_ticker}..."):
@@ -192,36 +193,40 @@ elif page == "⚖️ Stock Analyst":
                 s_mc = info.get('marketCap', 0)
                 s_price = info.get('currentPrice', 0)
                 
+                # --- PROFIT CHECK ---
+                # Yahoo often returns None or 0 for P/E if profitable is False
+                if s_pe is None: s_pe = 0
+                
                 if s_name == "Unknown":
-                    st.error("Could not identify sector. Peer comparison unavailable.")
+                    st.error("Could not identify sector.")
                 else:
                     st.subheader(f"Results for {target_ticker} ({s_name} Sector)")
                     
-                    # 2. Get Sector Averages via Finviz
-                    # We run a quick screen for the sector to get "average" valuations
+                    # 2. Get Sector Averages
                     screener = Valuation()
                     screener.set_filter(filters_dict={'Sector': s_name})
                     sector_df = screener.screener_view()
                     
-                    # Calculate Averages (Clean data first)
                     sector_df['P/E'] = pd.to_numeric(sector_df['P/E'], errors='coerce')
                     sector_df['P/B'] = pd.to_numeric(sector_df['P/B'], errors='coerce')
                     
                     avg_pe = sector_df['P/E'].mean()
                     avg_pb = sector_df['P/B'].mean()
                     
-                    # 3. Display Metrics
+                    # 3. Display Metrics (WITH FIX FOR 0 P/E)
                     m1, m2, m3 = st.columns(3)
                     
-                    # P/E Logic
-                    pe_diff = ((s_pe - avg_pe) / avg_pe) * 100 if avg_pe > 0 else 0
-                    m1.metric("P/E Ratio", f"{s_pe:.2f}", f"{pe_diff:.1f}% vs Sector", delta_color="inverse")
+                    # P/E Logic: If 0, show "Unprofitable" instead of "Cheap"
+                    if s_pe > 0:
+                        pe_diff = ((s_pe - avg_pe) / avg_pe) * 100 if avg_pe > 0 else 0
+                        m1.metric("P/E Ratio", f"{s_pe:.2f}", f"{pe_diff:.1f}% vs Sector", delta_color="inverse")
+                    else:
+                        m1.metric("P/E Ratio", "Unprofitable", "No Earnings", delta_color="off")
                     
                     # P/B Logic
                     pb_diff = ((s_pb - avg_pb) / avg_pb) * 100 if avg_pb > 0 else 0
                     m2.metric("P/B Ratio", f"{s_pb:.2f}", f"{pb_diff:.1f}% vs Sector", delta_color="inverse")
                     
-                    # Market Cap
                     m3.metric("Market Cap", f"${s_mc/1e9:.1f}B")
                     
                     # 4. Final Verdict
@@ -231,26 +236,5 @@ elif page == "⚖️ Stock Analyst":
                     reasons = []
                     score = 0
                     
-                    if s_pe > 0 and s_pe < avg_pe: 
-                        reasons.append(f"✅ **Underpriced on Earnings**: P/E is lower than {s_name} average ({avg_pe:.1f}).")
-                        score += 1
-                    elif s_pe > avg_pe:
-                        reasons.append(f"❌ **Premium Pricing**: Market is paying more for {target_ticker}'s earnings than the sector average.")
-                    
-                    if s_pb > 0 and s_pb < avg_pb:
-                        reasons.append(f"✅ **Asset Bargain**: P/B is lower than {s_name} average ({avg_pb:.1f}).")
-                        score += 1
-                    elif s_pb > avg_pb:
-                        reasons.append(f"❌ **Expensive Assets**: You are paying a premium for the company's book value.")
-
-                    if score == 2: st.success(f"**Strong Value Play**: {target_ticker} is mathematically cheaper than its peers on both counts.")
-                    elif score == 1: st.warning(f"**Mixed Value**: {target_ticker} is cheap on one metric but not the other.")
-                    else: st.error(f"**Growth/Expensive**: {target_ticker} is currently trading at a premium compared to its sector.")
-                    
-                    for r in reasons: st.write(r)
-                    
-                    if st.button(f"Add {target_ticker} to Portfolio"):
-                        if save_to_portfolio(target_ticker, s_price): st.toast("Saved!")
-
-            except Exception as e:
-                st.error(f"Could not analyze ticker. Error: {e}")
+                    # Score P/E (Only if profitable)
+                    if s_pe > 0 and s_pe < avg_pe:
