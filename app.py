@@ -86,8 +86,12 @@ def get_stock_data_safe(ticker):
         stock = yf.Ticker(ticker)
         info = stock.info
         
+        # We try to get the Long Name, if not, Short Name, if not, Ticker
+        name = info.get('longName', info.get('shortName', ticker))
+        
         data = {
             'ticker': ticker,
+            'name': name,  # <--- NEW FIELD
             'price': info.get('currentPrice', 0),
             'sector': info.get('sector', 'Unknown'),
             'pe': info.get('trailingPE', 0),
@@ -354,6 +358,7 @@ elif page == "⚖️ Stock Analyst":
                 if len(stock_data) == 1:
                     d = stock_data[ticker_a]
                     st.subheader(f"Analysis: {d['ticker']}")
+                    st.write(f"**Company:** {d['name']}") # <--- NEW
                     
                     avg_pe, avg_pb = get_sector_averages(d['sector'])
                     
@@ -392,10 +397,10 @@ elif page == "⚖️ Stock Analyst":
                     
                     with colA:
                         st.markdown(f"### {da['ticker']}")
+                        st.markdown(f"**{da['name']}**") # <--- NEW
                         st.write(f"**Sector:** {da['sector']}")
                         st.write(f"**Price:** ${da['price']}")
                         
-                        # P/E Display
                         if da['pe'] > 0: st.write(f"**P/E:** {da['pe']:.2f}")
                         else: st.write("**P/E:** Unprofitable")
                         
@@ -403,6 +408,7 @@ elif page == "⚖️ Stock Analyst":
 
                     with colB:
                         st.markdown(f"### {db['ticker']}")
+                        st.markdown(f"**{db['name']}**") # <--- NEW
                         st.write(f"**Sector:** {db['sector']}")
                         st.write(f"**Price:** ${db['price']}")
                         
@@ -451,7 +457,6 @@ elif page == "⚖️ Stock Analyst":
                         st.header("🤝 It's a Tie")
                         st.write("Both stocks offer similar value propositions.")
                         
-                    # Add Buttons
                     c1, c2 = st.columns(2)
                     if c1.button(f"Add {ticker_a}"):
                         save_to_portfolio(ticker_a, da['price'])
